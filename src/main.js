@@ -48,8 +48,9 @@ function showToast(message, duration = 3000) {
   }, duration);
 }
 
-// Render Status to UI
+// Render Status to UI (Pure DOM update)
 function renderStatus(status) {
+  if (!status) return;
   currentStatus = status;
 
   // Server state
@@ -70,7 +71,6 @@ function renderStatus(status) {
     funnelDomainDisplay.textContent = status.tailscale_funnel_domain;
     funnelUrlInput.value = `https://${status.tailscale_funnel_domain}`;
   } else if (status.tailscale_ip) {
-    // If funnel domain not explicitly parsed, use magicdns or default
     funnelDomainDisplay.textContent = 'fqrbc.taile81f15.ts.net';
     funnelUrlInput.value = 'https://fqrbc.taile81f15.ts.net';
   } else {
@@ -90,8 +90,8 @@ function renderStatus(status) {
   }
 
   // Local LAN IP
-  localIpDisplay.textContent = status.local_ip;
-  localUrlInput.value = `http://${status.local_ip}:${status.port}`;
+  localIpDisplay.textContent = status.local_ip || '127.0.0.1';
+  localUrlInput.value = `http://${status.local_ip || '127.0.0.1'}:${status.port}`;
 
   // Port & Startup checkbox
   if (!isUserEditingPort) {
@@ -158,13 +158,29 @@ function renderLogs(logs) {
   logsTbody.innerHTML = html;
 }
 
-// Fetch status from Rust backend
-async function refreshStatus() {
+// Fetch in-memory status instantly (Zero process execution)
+async function fetchStatusFast() {
   try {
     const status = await invoke('get_app_status');
     renderStatus(status);
   } catch (err) {
-    console.error('Error fetching status:', err);
+    console.error('Error fetching fast status:', err);
+  }
+}
+
+// Explicit refresh (Runs silent background scan only on demand)
+async function refreshExplicitly() {
+  btnRefreshPrinters.disabled = true;
+  btnRefreshPrinters.textContent = '🔄 Memindai...';
+  try {
+    const status = await invoke('refresh_system_info');
+    renderStatus(status);
+    showToast('🔄 Informasi printer & jaringan diperbarui!');
+  } catch (err) {
+    showToast('Gagal memindai ulang: ' + err);
+  } finally {
+    btnRefreshPrinters.disabled = false;
+    btnRefreshPrinters.textContent = '🔄 Refresh';
   }
 }
 
@@ -203,7 +219,7 @@ btnToggleServer.addEventListener('click', async () => {
     const nextState = !currentStatus.is_running;
     btnToggleServer.disabled = true;
     await invoke('toggle_server', { enable: nextState });
-    await refreshStatus();
+    await fetchStatusFast();
     showToast(nextState ? '🟢 Server berhasil dinyalakan!' : '🔴 Server dimatikan.');
   } catch (err) {
     showToast('Gagal mengubah status server: ' + err);
@@ -247,16 +263,13 @@ btnSavePrinter.addEventListener('click', async () => {
   try {
     const res = await invoke('save_printer_default', { printerName });
     showToast(`💾 ${res}`);
-    await refreshStatus();
+    await fetchStatusFast();
   } catch (err) {
     showToast('Gagal menyimpan printer default: ' + err);
   }
 });
 
-btnRefreshPrinters.addEventListener('click', async () => {
-  await refreshStatus();
-  showToast('🔄 Daftar printer fisik diperbarui!');
-});
+btnRefreshPrinters.addEventListener('click', refreshExplicitly);
 
 btnTestPrint.addEventListener('click', async () => {
   const printerName = selectPrinter.value || '';
@@ -265,7 +278,7 @@ btnTestPrint.addEventListener('click', async () => {
   try {
     const res = await invoke('test_print', { printerName });
     showToast(`🖨️ ${res}`);
-    await refreshStatus();
+    await fetchStatusFast();
   } catch (err) {
     showToast('❌ Gagal cetak uji coba: ' + err);
   } finally {
@@ -277,13 +290,22 @@ btnTestPrint.addEventListener('click', async () => {
 btnClearLogs.addEventListener('click', async () => {
   try {
     await invoke('clear_logs');
-    await refreshStatus();
+    await fetchStatusFast();
     showToast('Riwayat cetak dibersihkan.');
   } catch (err) {
     console.error(err);
   }
 });
 
-// Initial boot & Polling interval
-refreshStatus();
-setInterval(refreshStatus, 2500);
+// Real-time Event Listener from Tauri (Instant reactive update without polling)
+if (window.__TAURI__ && window.__TAURI__.event) {
+  window.__TAURI__.event.listen('new_print_log', (event) => {
+    fetchStatusFast();
+  });
+}
+
+// Initial Boot: Read memory status once immediately
+fetchStatusFast();
+
+// Gentle in-memory sync every 5 seconds (Cost: 0ms, Zero process spawns)
+setInterval(fetchStatusFast, 5000);
