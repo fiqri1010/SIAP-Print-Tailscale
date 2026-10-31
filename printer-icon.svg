@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b2545"/>
+      <stop offset="100%" stop-color="#134074"/>
+    </linearGradient>
+    <linearGradient id="printerGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#e2e8f0"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00a896"/>
+      <stop offset="100%" stop-color="#028090"/>
+    </linearGradient>
+    <filter id="dropShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <!-- Background Rounded Canvas -->
+  <rect width="512" height="512" rx="108" fill="url(#bgGrad)"/>
+
+  <!-- Printer Group with Shadow -->
+  <g filter="url(#dropShadow)">
+    <!-- Top Paper Sheet -->
+    <path d="M 160 80 L 352 80 L 352 210 L 160 210 Z" fill="#ffffff" rx="12"/>
+    <line x1="190" y1="120" x2="322" y2="120" stroke="#cbd5e1" stroke-width="8" stroke-linecap="round"/>
+    <line x1="190" y1="150" x2="290" y2="150" stroke="#cbd5e1" stroke-width="8" stroke-linecap="round"/>
+
+    <!-- Printer Main Body Top Plate -->
+    <rect x="96" y="190" width="320" height="150" rx="24" fill="url(#printerGrad)"/>
+    
+    <!-- Printer Accent Strip -->
+    <rect x="96" y="270" width="320" height="12" fill="url(#accentGrad)"/>
+
+    <!-- Paper Output Slot -->
+    <rect x="140" y="225" width="232" height="18" rx="8" fill="#1e293b"/>
+
+    <!-- Paper Tray Bottom Base -->
+    <rect x="80" y="320" width="352" height="96" rx="20" fill="#334155"/>
+    <rect x="136" y="340" width="240" height="60" rx="10" fill="#0f172a"/>
+
+    <!-- Printed Paper Ejecting -->
+    <path d="M 160 300 L 352 300 L 352 370 L 160 370 Z" fill="#ffffff" rx="8"/>
+    <line x1="184" y1="325" x2="328" y2="325" stroke="#00a896" stroke-width="6" stroke-linecap="round"/>
+    <line x1="184" y1="345" x2="280" y2="345" stroke="#94a3b8" stroke-width="6" stroke-linecap="round"/>
+
+    <!-- Control Panel & Status LED -->
+    <circle cx="376" cy="234" r="10" fill="#10b981"/>
+    <circle cx="376" cy="234" r="5" fill="#34d399"/>
+    <circle cx="346" cy="234" r="8" fill="#94a3b8"/>
+  </g>
+
+  <!-- Tailscale Lock Badge Bottom Right -->
+  <g transform="translate(340, 340)">
+    <circle cx="48" cy="48" r="44" fill="#00a896" stroke="#ffffff" stroke-width="6"/>
+    <!-- Padlock Icon -->
+    <rect x="34" y="44" width="28" height="24" rx="5" fill="#ffffff"/>
+    <path d="M 40 44 L 40 36 C 40 30, 56 30, 56 36 L 56 44" fill="none" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round"/>
+    <circle cx="48" cy="55" r="3" fill="#00a896"/>
+  </g>
+</svg>

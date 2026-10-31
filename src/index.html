@@ -11,9 +11,11 @@
     <!-- Top Bar -->
     <header class="app-header">
       <div class="header-brand">
-        <div class="brand-icon">🖨️</div>
+        <div class="brand-icon">
+          <img src="assets/printer.svg" alt="Printer" width="32" height="32" />
+        </div>
         <div>
-          <h1 class="brand-title">SIAP Print Tailscale</h1>
+          <h1 class="brand-title">SIAP Print Tailscale <span class="version-tag">v1.1</span></h1>
           <p class="brand-subtitle">KPU Bea Cukai Tanjung Priok • Jembatan Cetak Dokumen Resmi</p>
         </div>
       </div>
@@ -26,59 +28,92 @@
       </div>
     </header>
 
-    <!-- Main Content Grid -->
+    <!-- Main Content -->
     <main class="app-main">
-      <!-- Network Detection Grid -->
+      <!-- Network Detection Grid (3 Options) -->
       <section class="network-grid">
-        <!-- Tailscale IP Card -->
-        <div class="card card-highlight">
+        <!-- Opsi 1: Tailscale Funnel (HTTPS Tanpa Install Tailscale di HP) -->
+        <div class="card card-highlight-gold">
+          <div class="card-header">
+            <span class="card-icon">🚀</span>
+            <div>
+              <h3>Alamat Publik Funnel (Rekomendasi)</h3>
+              <p class="card-hint">Tanpa install Tailscale di HP • Aman lewat 4G/5G</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div id="funnel-domain-display" class="ip-address">Mendeteksi...</div>
+            <div class="url-copy-box">
+              <input type="text" id="funnel-url-input" readonly value="https://..." />
+              <button id="btn-copy-funnel" class="btn btn-small btn-gold">Salin URL</button>
+            </div>
+            <p class="card-note">💡 Tempelkan URL ini di SIAP NEO. HP petugas bisa langsung cetak dari mana saja tanpa aplikasi tambahan!</p>
+          </div>
+        </div>
+
+        <!-- Opsi 2: Tailscale Private IP (Dengan App Tailscale di HP) -->
+        <div class="card card-highlight-teal">
           <div class="card-header">
             <span class="card-icon">🔒</span>
-            <h3>Tailscale IP (Remote / 4G)</h3>
+            <div>
+              <h3>Tailscale Private IP (VPN Mesh)</h3>
+              <p class="card-hint">Jika HP petugas juga mengaktifkan Tailscale</p>
+            </div>
           </div>
           <div class="card-body">
             <div id="tailscale-ip-display" class="ip-address">Mendeteksi...</div>
-            <p class="card-hint">Gunakan URL ini di aplikasi SIAP NEO jika mencetak dari luar kantor:</p>
             <div class="url-copy-box">
               <input type="text" id="tailscale-url-input" readonly value="http://..." />
-              <button id="btn-copy-ts" class="btn btn-small btn-primary">Salin</button>
+              <button id="btn-copy-ts" class="btn btn-small btn-primary">Salin IP</button>
             </div>
             <div id="tailscale-warning" class="alert-box alert-warning hidden">
-              ⚠️ Tailscale belum aktif atau belum login di PC ini.
+              ⚠️ Tailscale belum aktif di PC ini.
               <button id="btn-open-ts" class="btn btn-tiny btn-outline">Buka Tailscale</button>
             </div>
           </div>
         </div>
 
-        <!-- Local LAN IP Card -->
+        <!-- Opsi 3: Local LAN IP (Satu WiFi Kantor) -->
         <div class="card">
           <div class="card-header">
             <span class="card-icon">🌐</span>
-            <h3>Local LAN IP (Satu WiFi)</h3>
+            <div>
+              <h3>Local LAN IP (Satu WiFi)</h3>
+              <p class="card-hint">Jika HP & PC terhubung ke WiFi kantor yang sama</p>
+            </div>
           </div>
           <div class="card-body">
             <div id="local-ip-display" class="ip-address">Mendeteksi...</div>
-            <p class="card-hint">Gunakan URL ini jika HP Android terhubung ke WiFi kantor yang sama:</p>
             <div class="url-copy-box">
               <input type="text" id="local-url-input" readonly value="http://..." />
-              <button id="btn-copy-lan" class="btn btn-small btn-secondary">Salin</button>
+              <button id="btn-copy-lan" class="btn btn-small btn-secondary">Salin LAN</button>
             </div>
           </div>
         </div>
+      </section>
 
-        <!-- Port Setting Card -->
-        <div class="card">
-          <div class="card-header">
+      <!-- Server & Startup Configuration -->
+      <section class="card settings-card">
+        <div class="card-header space-between">
+          <div class="header-left">
             <span class="card-icon">⚙️</span>
-            <h3>Port HTTP Server</h3>
+            <h3>Konfigurasi Port & Startup Windows</h3>
           </div>
-          <div class="card-body">
-            <label for="input-port" class="field-label">Port Listening:</label>
-            <div class="port-input-row">
-              <input type="number" id="input-port" min="1024" max="65535" value="1234" />
-              <button id="btn-save-port" class="btn btn-primary">Terapkan</button>
-            </div>
-            <p class="card-hint text-muted">Pastikan port ini diizinkan di Windows Firewall.</p>
+          <div class="header-right">
+            <button id="btn-save-settings" class="btn btn-small btn-primary">Terapkan Pengaturan</button>
+          </div>
+        </div>
+        <div class="card-body config-row">
+          <div class="config-item">
+            <label for="input-port" class="field-label">Port Server:</label>
+            <input type="number" id="input-port" min="1024" max="65535" value="1234" class="input-number" />
+          </div>
+          <div class="config-item checkbox-item">
+            <label class="checkbox-container">
+              <input type="checkbox" id="chk-auto-start" />
+              <span class="checkmark"></span>
+              <span class="checkbox-label">Jalankan otomatis saat Windows startup (Sembunyi di Background System Tray)</span>
+            </label>
           </div>
         </div>
       </section>
@@ -87,15 +122,16 @@
       <section class="card printer-card">
         <div class="card-header space-between">
           <div class="header-left">
-            <span class="card-icon">📄</span>
+            <span class="card-icon">🖨️</span>
             <div>
-              <h3>Pengaturan Printer Windows</h3>
-              <p class="card-hint">Pilih printer fisik di PC ini untuk mencetak dokumen PIB, Dokap, dan BAP.</p>
+              <h3>Pilihan Printer Fisik Kantor</h3>
+              <p class="card-hint">Hanya menampilkan printer fisik (printer virtual PDF telah disaring).</p>
             </div>
           </div>
           <div class="header-right">
             <button id="btn-refresh-printers" class="btn btn-small btn-outline">🔄 Refresh</button>
-            <button id="btn-test-print" class="btn btn-small btn-success">🖨️ Uji Cetak (Test)</button>
+            <button id="btn-save-printer" class="btn btn-small btn-success">💾 Simpan Printer Default</button>
+            <button id="btn-test-print" class="btn btn-small btn-secondary">📄 Uji Cetak (Test)</button>
           </div>
         </div>
         <div class="card-body">
@@ -108,18 +144,15 @@
         </div>
       </section>
 
-      <!-- Petunjuk Singkat SIAP NEO -->
-      <div class="info-banner">
-        <strong>💡 Petunjuk Penggunaan untuk SIAP NEO:</strong>
-        Buka menu <em>Pengaturan / Profil</em> di aplikasi SIAP NEO, lalu masukkan URL Tailscale di atas ke dalam kolom <strong>IP Printer Kantor</strong>. Setiap dokumen PIB atau BAP yang ditekan tombol cetak akan langsung keluar di printer ini.
-      </div>
-
       <!-- Live Logs Section -->
       <section class="card logs-card">
         <div class="card-header space-between">
           <div class="header-left">
             <span class="card-icon">📋</span>
-            <h3>Riwayat Cetak Dokumen Real-Time</h3>
+            <div>
+              <h3>Riwayat Cetak Dokumen Real-Time (PIB, BAP, Dokap)</h3>
+              <p class="card-hint">Mencatat otomatis setiap dokumen yang dikirim dari aplikasi SIAP NEO.</p>
+            </div>
           </div>
           <div class="header-right">
             <button id="btn-clear-logs" class="btn btn-tiny btn-outline">Bersihkan Riwayat</button>
@@ -139,7 +172,7 @@
               </thead>
               <tbody id="logs-tbody">
                 <tr>
-                  <td colspan="5" class="text-center text-muted empty-state">Belum ada dokumen yang dicetak.</td>
+                  <td colspan="5" class="text-center text-muted empty-state">Belum ada dokumen yang dicetak dari SIAP NEO.</td>
                 </tr>
               </tbody>
             </table>

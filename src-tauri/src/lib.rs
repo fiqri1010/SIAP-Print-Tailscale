@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
@@ -7,7 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, State};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -29,13 +32,22 @@ pub struct PrintLogItem {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AppConfig {
+    pub port: u16,
+    pub selected_printer: String,
+    pub auto_start_startup: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppStatus {
     pub is_running: bool,
     pub port: u16,
     pub tailscale_ip: Option<String>,
+    pub tailscale_funnel_domain: Option<String>,
     pub local_ip: String,
     pub hostname: String,
     pub selected_printer: String,
+    pub auto_start_startup: bool,
     pub printers: Vec<PrinterInfo>,
     pub logs: Vec<PrintLogItem>,
 }
@@ -44,11 +56,37 @@ pub struct AppState {
     pub is_running: Arc<AtomicBool>,
     pub port: Arc<AtomicU16>,
     pub selected_printer: Arc<Mutex<String>>,
+    pub auto_start_startup: Arc<AtomicBool>,
     pub logs: Arc<Mutex<Vec<PrintLogItem>>>,
     pub server_handle: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
 }
 
-// Helper: Format current time as HH:MM:SS
+fn get_config_path() -> PathBuf {
+    let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+    let dir = PathBuf::from(app_data).join("SIAP-Print-Tailscale");
+    let _ = fs::create_dir_all(&dir);
+    dir.join("config.json")
+}
+
+fn load_config() -> AppConfig {
+    let path = get_config_path();
+    if let Ok(data) = fs::read_to_string(path) {
+        if let Ok(cfg) = serde_json::from_str(&data) {
+            return cfg;
+        }
+    }
+    AppConfig {
+        port: 1234,
+        selected_printer: String::new(),
+        auto_start_startup: false,
+    }
+}
+
+fn save_config(cfg: &AppConfig) {
+    let path = get_config_path();
+    let _ = fs::write(path, serde_json::to_string_pretty(cfg).unwrap_or_default());
+}
+
 fn current_time_str() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -57,12 +95,10 @@ fn current_time_str() -> String {
     let hours = (now / 3600) % 24;
     let minutes = (now / 60) % 60;
     let seconds = now % 60;
-    format!("{:02}:{:02}:{:02}", (hours + 7) % 24, minutes, seconds) // UTC+7 approx
+    format!("{:02}:{:02}:{:02}", (hours + 7) % 24, minutes, seconds)
 }
 
-// Helper: Detect Tailscale IPv4
 fn detect_tailscale_ip() -> Option<String> {
-    // 1. Try running tailscale.exe ip -4
     let paths = [
         "C:\\Program Files\\Tailscale\\tailscale.exe",
         "tailscale.exe",
@@ -78,7 +114,6 @@ fn detect_tailscale_ip() -> Option<String> {
         }
     }
 
-    // 2. Fallback: Parse ipconfig for 100.x.x.x
     if let Ok(output) = Command::new("powershell")
         .args(["-NoProfile", "-Command", "Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -like '100.*' } | Select-Object -ExpandProperty IPAddress -First 1"])
         .output()
@@ -94,7 +129,51 @@ fn detect_tailscale_ip() -> Option<String> {
     None
 }
 
-// Helper: Detect Local LAN IPv4
+fn detect_tailscale_funnel_domain() -> Option<String> {
+    let paths = [
+        "C:\\Program Files\\Tailscale\\tailscale.exe",
+        "tailscale.exe",
+    ];
+    for p in paths {
+        // 1. Try serve status
+        if let Ok(output) = Command::new(p).args(["serve", "status", "--json"]).output() {
+            if output.status.success() {
+                let s = String::from_utf8_lossy(&output.stdout);
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&s) {
+                    if let Some(fg) = val.get("Foreground").and_then(|f| f.as_object()) {
+                        for (_k, v) in fg {
+                            if let Some(web) = v.get("Web").and_then(|w| w.as_object()) {
+                                for domain_port in web.keys() {
+                                    let domain = domain_port.split(':').next().unwrap_or(domain_port);
+                                    if !domain.is_empty() {
+                                        return Some(domain.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Fallback: try status --json DNSName
+        if let Ok(output) = Command::new(p).args(["status", "--json"]).output() {
+            if output.status.success() {
+                let s = String::from_utf8_lossy(&output.stdout);
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&s) {
+                    if let Some(dns) = val.get("Self").and_then(|s| s.get("DNSName")).and_then(|d| d.as_str()) {
+                        let trimmed = dns.trim_end_matches('.');
+                        if !trimmed.is_empty() {
+                            return Some(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn detect_local_ip() -> String {
     if let Ok(output) = Command::new("powershell")
         .args(["-NoProfile", "-Command", "Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '100.*' -and $_.IPAddress -notlike '169.254.*' } | Select-Object -ExpandProperty IPAddress -First 1"])
@@ -110,7 +189,7 @@ fn detect_local_ip() -> String {
     "127.0.0.1".to_string()
 }
 
-// Helper: Fetch installed Windows printers
+// Helper: Filter out Virtual PDF, Fax, and OneNote printers
 fn detect_printers() -> Vec<PrinterInfo> {
     let script = r#"
         Get-Printer | Select-Object Name, DriverName, PortName, @{Name='Default';Expression={$_.Default}} | ConvertTo-Json -Compress
@@ -138,12 +217,30 @@ fn detect_printers() -> Vec<PrinterInfo> {
                         let driver = item["DriverName"].as_str().unwrap_or("").to_string();
                         let port = item["PortName"].as_str().unwrap_or("").to_string();
                         let is_default = item["Default"].as_bool().unwrap_or(false);
-                        Some(PrinterInfo {
-                            name,
-                            driver,
-                            port,
-                            is_default,
-                        })
+
+                        // HAPUS DETEKSI PRINTER KE PDF / ONENOTE / FAX
+                        let name_lower = name.to_lowercase();
+                        let driver_lower = driver.to_lowercase();
+                        let is_virtual = name_lower.contains("pdf")
+                            || name_lower.contains("onenote")
+                            || name_lower.contains("fax")
+                            || name_lower.contains("xps")
+                            || name_lower.contains("document writer")
+                            || driver_lower.contains("pdf")
+                            || driver_lower.contains("onenote")
+                            || driver_lower.contains("fax")
+                            || driver_lower.contains("xps");
+
+                        if is_virtual {
+                            None
+                        } else {
+                            Some(PrinterInfo {
+                                name,
+                                driver,
+                                port,
+                                is_default,
+                            })
+                        }
                     })
                     .collect();
             }
@@ -152,9 +249,7 @@ fn detect_printers() -> Vec<PrinterInfo> {
     vec![]
 }
 
-// Helper: Print a PDF file directly using SumatraPDF or PowerShell PrintTo
 fn print_pdf_to_windows(file_path: &str, target_printer: &str) -> Result<String, String> {
-    // Check for SumatraPDF in common paths
     let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_default();
     let sumatra_paths = [
         format!("{}\\SumatraPDF\\SumatraPDF.exe", local_app_data),
@@ -178,7 +273,6 @@ fn print_pdf_to_windows(file_path: &str, target_printer: &str) -> Result<String,
             Err(e) => Err(format!("Gagal mengeksekusi SumatraPDF: {}", e)),
         }
     } else {
-        // Fallback: PowerShell PrintTo
         let ps_cmd = if target_printer.is_empty() {
             format!("Start-Process -FilePath \"{}\" -Verb Print -PassThru | Out-Null", file_path)
         } else {
@@ -196,7 +290,30 @@ fn print_pdf_to_windows(file_path: &str, target_printer: &str) -> Result<String,
     }
 }
 
-// Background HTTP Server implementation using tiny_http
+fn configure_startup_shortcut(enable: bool) {
+    let script = if enable {
+        r#"
+            $exePath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+            $startup = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+            $shortcutPath = Join-Path $startup "SIAP-Print-Tailscale.lnk"
+            $wsh = New-Object -ComObject WScript.Shell
+            $sc = $wsh.CreateShortcut($shortcutPath)
+            $sc.TargetPath = $exePath
+            $sc.Arguments = "--hidden"
+            $sc.WorkingDirectory = Split-Path $exePath
+            $sc.Description = "SIAP Print Tailscale Background Service"
+            $sc.Save()
+        "#
+    } else {
+        r#"
+            $startup = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+            $shortcutPath = Join-Path $startup "SIAP-Print-Tailscale.lnk"
+            if (Test-Path $shortcutPath) { Remove-Item $shortcutPath -Force }
+        "#
+    };
+    let _ = Command::new("powershell").args(["-NoProfile", "-Command", script]).output();
+}
+
 fn start_http_listener(
     port: u16,
     is_running: Arc<AtomicBool>,
@@ -208,18 +325,15 @@ fn start_http_listener(
 
     let handle = thread::spawn(move || {
         while is_running.load(Ordering::SeqCst) {
-            // Non-blocking or timed accept so we can exit cleanly
             if let Ok(Some(mut request)) = server.recv_timeout(std::time::Duration::from_millis(500)) {
                 let url = request.url().to_string();
                 let method = request.method().clone();
 
-                // Common CORS headers
                 let cors_origin = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
                 let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Origin, Content-Type, Accept, Authorization"[..]).unwrap();
                 let cors_methods = Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap();
                 let cors_pna = Header::from_bytes(&b"Access-Control-Allow-Private-Network"[..], &b"true"[..]).unwrap();
 
-                // Handle preflight OPTIONS
                 if method == Method::Options {
                     let mut resp = Response::empty(StatusCode(204));
                     resp.add_header(cors_origin);
@@ -230,7 +344,6 @@ fn start_http_listener(
                     continue;
                 }
 
-                // Handle /ping
                 if url == "/ping" && method == Method::Get {
                     let mut resp = Response::from_string("🖨️ SIAP Print Server is running");
                     resp.add_header(cors_origin);
@@ -239,15 +352,16 @@ fn start_http_listener(
                     continue;
                 }
 
-                // Handle /info
                 if url == "/info" && method == Method::Get {
                     let ts_ip = detect_tailscale_ip();
+                    let ts_domain = detect_tailscale_funnel_domain();
                     let local_ip = detect_local_ip();
                     let curr_printer = selected_printer.lock().unwrap().clone();
                     let json = serde_json::json!({
                         "status": "online",
                         "port": port,
                         "tailscaleIp": ts_ip,
+                        "tailscaleFunnelDomain": ts_domain,
                         "localIp": local_ip,
                         "selectedPrinter": curr_printer
                     });
@@ -259,7 +373,6 @@ fn start_http_listener(
                     continue;
                 }
 
-                // Handle /printers
                 if url == "/printers" && method == Method::Get {
                     let list = detect_printers();
                     let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
@@ -271,7 +384,6 @@ fn start_http_listener(
                     continue;
                 }
 
-                // Handle /print-pdf (POST)
                 if url == "/print-pdf" && method == Method::Post {
                     let mut body_str = String::new();
                     if let Err(_) = request.as_reader().read_to_string(&mut body_str) {
@@ -321,7 +433,6 @@ fn start_http_listener(
                                         Err(err) => (false, err),
                                     };
 
-                                    // Record log
                                     let log_item = PrintLogItem {
                                         id: timestamp as u64,
                                         time: current_time_str(),
@@ -337,7 +448,6 @@ fn start_http_listener(
                                         }
                                     }
 
-                                    // Clean up temp file after delay
                                     let p_to_clean = temp_file_path.clone();
                                     thread::spawn(move || {
                                         thread::sleep(std::time::Duration::from_secs(60));
@@ -373,7 +483,6 @@ fn start_http_listener(
                     continue;
                 }
 
-                // Default 404
                 let mut resp = Response::from_string("Not Found");
                 resp.add_header(cors_origin);
                 let _ = request.respond(resp);
@@ -384,15 +493,16 @@ fn start_http_listener(
     Ok(handle)
 }
 
-// Tauri Commands
 #[tauri::command]
 fn get_app_status(state: State<AppState>) -> AppStatus {
     let is_running = state.is_running.load(Ordering::SeqCst);
     let port = state.port.load(Ordering::SeqCst);
     let tailscale_ip = detect_tailscale_ip();
+    let tailscale_funnel_domain = detect_tailscale_funnel_domain();
     let local_ip = detect_local_ip();
     let hostname = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows-PC".to_string());
     let selected_printer = state.selected_printer.lock().unwrap().clone();
+    let auto_start_startup = state.auto_start_startup.load(Ordering::SeqCst);
     let printers = detect_printers();
     let logs = state.logs.lock().unwrap().clone();
 
@@ -400,9 +510,11 @@ fn get_app_status(state: State<AppState>) -> AppStatus {
         is_running,
         port,
         tailscale_ip,
+        tailscale_funnel_domain,
         local_ip,
         hostname,
         selected_printer,
+        auto_start_startup,
         printers,
         logs,
     }
@@ -430,14 +542,40 @@ fn toggle_server(enable: bool, state: State<AppState>) -> Result<bool, String> {
 }
 
 #[tauri::command]
+fn save_printer_default(printer_name: String, state: State<AppState>) -> Result<String, String> {
+    *state.selected_printer.lock().unwrap() = printer_name.clone();
+
+    // Persist to config
+    let cfg = AppConfig {
+        port: state.port.load(Ordering::SeqCst),
+        selected_printer: printer_name.clone(),
+        auto_start_startup: state.auto_start_startup.load(Ordering::SeqCst),
+    };
+    save_config(&cfg);
+
+    Ok(format!("Printer default berhasil disimpan: {}", printer_name))
+}
+
+#[tauri::command]
 fn update_settings(
     new_port: u16,
     new_printer: String,
+    auto_start: bool,
     state: State<AppState>,
 ) -> Result<AppStatus, String> {
     let old_port = state.port.load(Ordering::SeqCst);
     state.port.store(new_port, Ordering::SeqCst);
-    *state.selected_printer.lock().unwrap() = new_printer;
+    *state.selected_printer.lock().unwrap() = new_printer.clone();
+    state.auto_start_startup.store(auto_start, Ordering::SeqCst);
+
+    // Update config file
+    let cfg = AppConfig {
+        port: new_port,
+        selected_printer: new_printer,
+        auto_start_startup: auto_start,
+    };
+    save_config(&cfg);
+    configure_startup_shortcut(auto_start);
 
     // Restart server if running and port changed
     if state.is_running.load(Ordering::SeqCst) && old_port != new_port {
@@ -467,15 +605,14 @@ fn test_print(printer_name: String, state: State<AppState>) -> Result<String, St
     };
 
     if final_printer.is_empty() {
-        return Err("Tidak ada printer yang dipilih atau terpasang di sistem.".to_string());
+        return Err("Tidak ada printer fisik yang dipilih atau terpasang di sistem.".to_string());
     }
 
-    // Generate small test text file or test page
     let temp_dir = std::env::temp_dir();
     let test_file = temp_dir.join("SIAP_Test_Print.txt");
     let content = format!(
         "=========================================\r\n\
-         UJI COBA CETAK DOKUMEN SIAP NEO\r\n\
+         UJI COBA CETAK DOKUMEN RESMI SIAP NEO\r\n\
          KPU BEA CUKAI TANJUNG PRIOK\r\n\
          =========================================\r\n\
          Printer : {}\r\n\
@@ -487,7 +624,6 @@ fn test_print(printer_name: String, state: State<AppState>) -> Result<String, St
     );
     let _ = fs::write(&test_file, content);
 
-    // Print test file using Notepad /p or PowerShell
     let ps_cmd = format!(
         "Start-Process -FilePath notepad.exe -ArgumentList '/p \"{}\"' -WindowStyle Hidden",
         test_file.to_string_lossy()
@@ -534,22 +670,25 @@ fn open_tailscale() -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let saved_cfg = load_config();
     let is_running = Arc::new(AtomicBool::new(true));
-    let port = Arc::new(AtomicU16::new(1234));
-    let selected_printer = Arc::new(Mutex::new(String::new()));
+    let port = Arc::new(AtomicU16::new(saved_cfg.port));
+    let selected_printer = Arc::new(Mutex::new(saved_cfg.selected_printer.clone()));
+    let auto_start_startup = Arc::new(AtomicBool::new(saved_cfg.auto_start_startup));
     let logs = Arc::new(Mutex::new(Vec::new()));
 
-    // Automatically set default printer from Windows
-    let printers = detect_printers();
-    if let Some(def) = printers.iter().find(|p| p.is_default) {
-        *selected_printer.lock().unwrap() = def.name.clone();
-    } else if let Some(first) = printers.first() {
-        *selected_printer.lock().unwrap() = first.name.clone();
+    // Fallback default printer if none saved
+    if saved_cfg.selected_printer.is_empty() {
+        let printers = detect_printers();
+        if let Some(def) = printers.iter().find(|p| p.is_default) {
+            *selected_printer.lock().unwrap() = def.name.clone();
+        } else if let Some(first) = printers.first() {
+            *selected_printer.lock().unwrap() = first.name.clone();
+        }
     }
 
-    // Auto start server on port 1234
     let server_handle = match start_http_listener(
-        1234,
+        saved_cfg.port,
         Arc::clone(&is_running),
         Arc::clone(&logs),
         Arc::clone(&selected_printer),
@@ -565,16 +704,84 @@ pub fn run() {
         is_running,
         port,
         selected_printer,
+        auto_start_startup,
         logs,
         server_handle,
     };
 
     tauri::Builder::default()
         .manage(app_state)
+        .setup(|app| {
+            // Build Tray Menu
+            let show_i = MenuItem::with_id(app, "show", "Buka SIAP Print", true, None::<&str>)?;
+            let hide_i = MenuItem::with_id(app, "hide", "Sembunyikan ke Tray", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", "Keluar", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_i, &hide_i, &quit_i])?;
+
+            if let Some(icon) = app.default_window_icon() {
+                let _tray = TrayIconBuilder::new()
+                    .icon(icon.clone())
+                    .tooltip("SIAP Print Tailscale - KPU Bea Cukai Tanjung Priok")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| {
+                        match event.id.as_ref() {
+                            "show" => {
+                                if let Some(window) = app.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                            "hide" => {
+                                if let Some(window) = app.get_webview_window("main") {
+                                    let _ = window.hide();
+                                }
+                            }
+                            "quit" => {
+                                app.exit(0);
+                            }
+                            _ => {}
+                        }
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+                            let app = tray.app_handle();
+                            if let Some(window) = app.get_webview_window("main") {
+                                if window.is_visible().unwrap_or(false) {
+                                    let _ = window.hide();
+                                } else {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                        }
+                    })
+                    .build(app)?;
+            }
+
+            // Check if launched with --hidden or --minimized or auto-start
+            let args: Vec<String> = std::env::args().collect();
+            let start_hidden = args.iter().any(|a| a == "--hidden" || a == "--minimized" || a == "--startup");
+            if start_hidden {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // When user closes window, minimize/hide to tray instead of exiting
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_app_status,
             toggle_server,
             update_settings,
+            save_printer_default,
             test_print,
             clear_logs,
             open_tailscale
