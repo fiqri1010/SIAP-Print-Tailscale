@@ -58,9 +58,13 @@ Commit Ref: \`$gitHash\`
    - Hanya menampilkan printer fisik resmi (seperti **Kyocera TASKalfa MZ3200i KX**).
 4. **Penyimpanan Permanen Printer Default**
    - Dilengkapi tombol \`Simpan Printer Default\` yang disimpan ke konfigurasi permanen (\`config.json\`).
-5. **Ikon Vektor Resmi Printer**
-   - Menggunakan ikon vektor printer modern dengan indikator keamanan Tailscale.
-6. **Tanda Tangan Digital Authenticode**
+5. **Arsitektur In-Memory Cache & Silent Execution (Bebas Kedipan Window)**
+   - Menghilangkan bug CMD/PowerShell berulang-ulang yang mengganggu interaksi aplikasi.
+   - Status sistem, IP Tailscale, dan printer di-cache langsung di memori Rust backend (0ms latency response).
+   - Semua proses background menggunakan flag \`CREATE_NO_WINDOW (0x08000000)\` agar berjalan 100% senyap.
+6. **Ikon Vektor Resmi Printer**
+   - Menggunakan ikon vektor printer modern dengan indikator status jaringan.
+7. **Tanda Tangan Digital Authenticode**
    - File eksekusi ditandatangani secara digital dengan stempel waktu resmi (DigiCert Timestamping).
 
 ---
