@@ -44,10 +44,19 @@ pub struct AppConfig {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct CachedData {
     pub tailscale_ip: Option<String>,
+    /// Domain Funnel yang BENAR-BENAR aktif (AllowFunnel = true). None bila Funnel mati.
     pub tailscale_funnel_domain: Option<String>,
+    /// Nama MagicDNS PC (selalu ada bila Tailscale login), dipakai untuk saran perintah Funnel.
+    pub tailscale_dns_name: Option<String>,
+    /// Port lokal yang diteruskan Funnel (mis. 1234). None bila tidak diketahui.
+    pub funnel_target_port: Option<u16>,
     pub local_ip: String,
     pub hostname: String,
     pub printers: Vec<PrinterInfo>,
+    /// Aturan Windows Firewall untuk port server sudah ada (jalur IP Tailscale & LAN).
+    pub firewall_ok: bool,
+    pub firewall_port: u16,
+    pub sumatra_path: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -56,12 +65,24 @@ pub struct AppStatus {
     pub port: u16,
     pub tailscale_ip: Option<String>,
     pub tailscale_funnel_domain: Option<String>,
+    pub tailscale_dns_name: Option<String>,
+    pub funnel_target_port: Option<u16>,
     pub local_ip: String,
     pub hostname: String,
     pub selected_printer: String,
     pub auto_start_startup: bool,
     pub printers: Vec<PrinterInfo>,
     pub logs: Vec<PrintLogItem>,
+    pub firewall_ok: bool,
+    pub sumatra_path: Option<String>,
+    pub server_error: Option<String>,
+}
+
+/// Server HTTP yang sedang berjalan: flag berhenti miliknya sendiri + handle thread,
+/// sehingga mematikan/menyalakan ulang tidak pernah menyisakan listener lama di port yang sama.
+pub struct RunningServer {
+    stop: Arc<AtomicBool>,
+    handle: thread::JoinHandle<()>,
 }
 
 pub struct AppState {
@@ -71,8 +92,89 @@ pub struct AppState {
     pub auto_start_startup: Arc<AtomicBool>,
     pub logs: Arc<Mutex<Vec<PrintLogItem>>>,
     pub cache: Arc<Mutex<CachedData>>,
-    pub server_handle: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
+    pub server: Arc<Mutex<Option<RunningServer>>>,
+    pub server_error: Arc<Mutex<Option<String>>>,
     pub app_handle: Arc<Mutex<Option<tauri::AppHandle>>>,
+}
+
+const TAILSCALE_PATHS: [&str; 2] = ["C:\\Program Files\\Tailscale\\tailscale.exe", "tailscale.exe"];
+
+fn firewall_rule_name(port: u16) -> String {
+    format!("SIAP Print Tailscale (TCP {})", port)
+}
+
+/// Mengecek aturan inbound Windows Firewall untuk port server (tanpa jendela, tanpa admin).
+fn firewall_rule_exists(port: u16) -> bool {
+    let name = firewall_rule_name(port);
+    match Command::new("netsh")
+        .args(["advfirewall", "firewall", "show", "rule", &format!("name={}", name)])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
+        Ok(out) => out.status.success() && String::from_utf8_lossy(&out.stdout).contains(&name),
+        Err(_) => false,
+    }
+}
+
+fn find_sumatra() -> Option<String> {
+    let mut candidates = Vec::new();
+    for var in ["LOCALAPPDATA", "ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+        if let Ok(base) = std::env::var(var) {
+            candidates.push(format!("{}\\SumatraPDF\\SumatraPDF.exe", base));
+        }
+    }
+    candidates.push("C:\\Program Files\\SumatraPDF\\SumatraPDF.exe".to_string());
+    candidates.push("C:\\Program Files (x86)\\SumatraPDF\\SumatraPDF.exe".to_string());
+    candidates.into_iter().find(|p| std::path::Path::new(p).exists())
+}
+
+/// Membaca `tailscale serve status --json`. Mendukung mode latar (`--bg`, kunci di level atas)
+/// maupun mode foreground. Mengembalikan (domain Funnel aktif, port lokal tujuan proxy).
+fn parse_funnel_status(val: &serde_json::Value) -> (Option<String>, Option<u16>) {
+    let mut configs: Vec<&serde_json::Value> = vec![val];
+    if let Some(fg) = val.get("Foreground").and_then(|f| f.as_object()) {
+        configs.extend(fg.values());
+    }
+    for cfg in configs {
+        let Some(allow) = cfg.get("AllowFunnel").and_then(|a| a.as_object()) else { continue };
+        for (host_port, enabled) in allow {
+            if !enabled.as_bool().unwrap_or(false) {
+                continue;
+            }
+            let domain = host_port.split(':').next().unwrap_or(host_port).to_string();
+            if domain.is_empty() {
+                continue;
+            }
+            let target = cfg
+                .get("Web")
+                .and_then(|w| w.get(host_port))
+                .and_then(|w| w.get("Handlers"))
+                .and_then(|h| h.as_object())
+                .and_then(|h| h.values().find_map(|v| v.get("Proxy").and_then(|p| p.as_str()).map(|s| s.to_string())))
+                .and_then(|proxy| proxy.rsplit(':').next().and_then(|p| p.trim_end_matches('/').parse::<u16>().ok()));
+            return (Some(domain), target);
+        }
+    }
+    (None, None)
+}
+
+/// Nama printer yang pernah tersimpan sebagai teks JSON objek dikembalikan ke nama saja.
+fn bare_printer_name(raw: &str) -> String {
+    let t = raw.trim();
+    if t.starts_with('{') {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) {
+            if let Some(n) = v.get("name").and_then(|n| n.as_str()) {
+                return n.trim().to_string();
+            }
+        }
+    }
+    t.to_string()
+}
+
+/// Skrip PowerShell → argumen `-EncodedCommand` (UTF-16LE Base64), bebas masalah tanda kutip.
+fn ps_encoded(script: &str) -> String {
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    BASE64_STANDARD.encode(bytes)
 }
 
 fn get_config_path() -> PathBuf {
@@ -128,87 +230,66 @@ fn detect_local_ip_native() -> String {
 }
 
 // Background detection: Called ONCE at startup or when user clicks Refresh (Silent with CREATE_NO_WINDOW)
-fn query_system_info_silent() -> CachedData {
+fn query_system_info_silent(port: u16) -> CachedData {
     let local_ip = detect_local_ip_native();
     let hostname = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows-PC".to_string());
 
     let mut tailscale_ip: Option<String> = None;
     let mut tailscale_funnel_domain: Option<String> = None;
+    let mut tailscale_dns_name: Option<String> = None;
+    let mut funnel_target_port: Option<u16> = None;
 
-    let ts_paths = [
-        "C:\\Program Files\\Tailscale\\tailscale.exe",
-        "tailscale.exe",
-    ];
+    for p in TAILSCALE_PATHS {
+        // 1. IP Tailscale (100.x.x.x)
+        let Ok(output) = Command::new(p)
+            .args(["ip", "-4"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        else {
+            continue;
+        };
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if s.starts_with("100.") {
+                tailscale_ip = Some(s);
+            }
+        }
 
-    for p in ts_paths {
-        // 1. Get Tailscale IP
-        if tailscale_ip.is_none() {
-            if let Ok(output) = Command::new(p)
-                .args(["ip", "-4"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output()
-            {
-                if output.status.success() {
-                    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if s.starts_with("100.") {
-                        tailscale_ip = Some(s);
-                    }
+        // 2. Funnel yang benar-benar aktif (AllowFunnel), termasuk mode --bg
+        if let Ok(output) = Command::new(p)
+            .args(["serve", "status", "--json"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            if output.status.success() {
+                let s = String::from_utf8_lossy(&output.stdout);
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&s) {
+                    let (domain, target) = parse_funnel_status(&val);
+                    tailscale_funnel_domain = domain;
+                    funnel_target_port = target;
                 }
             }
         }
 
-        // 2. Get Tailscale Serve/Funnel domain
-        if tailscale_funnel_domain.is_none() {
-            if let Ok(output) = Command::new(p)
-                .args(["serve", "status", "--json"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output()
-            {
-                if output.status.success() {
-                    let s = String::from_utf8_lossy(&output.stdout);
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&s) {
-                        if let Some(fg) = val.get("Foreground").and_then(|f| f.as_object()) {
-                            for (_k, v) in fg {
-                                if let Some(web) = v.get("Web").and_then(|w| w.as_object()) {
-                                    for domain_port in web.keys() {
-                                        let domain = domain_port.split(':').next().unwrap_or(domain_port);
-                                        if !domain.is_empty() {
-                                            tailscale_funnel_domain = Some(domain.to_string());
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
+        // 3. Nama MagicDNS PC (bukan bukti Funnel aktif, hanya untuk saran)
+        if let Ok(output) = Command::new(p)
+            .args(["status", "--json"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            if output.status.success() {
+                let s = String::from_utf8_lossy(&output.stdout);
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&s) {
+                    if let Some(dns) = val.get("Self").and_then(|s| s.get("DNSName")).and_then(|d| d.as_str()) {
+                        let trimmed = dns.trim_end_matches('.');
+                        if !trimmed.is_empty() {
+                            tailscale_dns_name = Some(trimmed.to_string());
                         }
                     }
                 }
             }
         }
-
-        // 3. Fallback: query status --json for DNSName
-        if tailscale_funnel_domain.is_none() {
-            if let Ok(output) = Command::new(p)
-                .args(["status", "--json"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output()
-            {
-                if output.status.success() {
-                    let s = String::from_utf8_lossy(&output.stdout);
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&s) {
-                        if let Some(dns) = val.get("Self").and_then(|s| s.get("DNSName")).and_then(|d| d.as_str()) {
-                            let trimmed = dns.trim_end_matches('.');
-                            if !trimmed.is_empty() {
-                                tailscale_funnel_domain = Some(trimmed.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if tailscale_ip.is_some() && tailscale_funnel_domain.is_some() {
-            break;
-        }
+        break;
     }
 
     // 4. Detect Printers (PowerShell with CREATE_NO_WINDOW, completely hidden)
@@ -269,24 +350,20 @@ fn query_system_info_silent() -> CachedData {
     CachedData {
         tailscale_ip,
         tailscale_funnel_domain,
+        tailscale_dns_name,
+        funnel_target_port,
         local_ip,
         hostname,
         printers,
+        firewall_ok: firewall_rule_exists(port),
+        firewall_port: port,
+        sumatra_path: find_sumatra(),
     }
 }
 
 fn print_pdf_to_windows(file_path: &str, target_printer: &str) -> Result<String, String> {
-    let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_default();
-    let sumatra_paths = [
-        format!("{}\\SumatraPDF\\SumatraPDF.exe", local_app_data),
-        "C:\\Program Files\\SumatraPDF\\SumatraPDF.exe".to_string(),
-        "C:\\Program Files (x86)\\SumatraPDF\\SumatraPDF.exe".to_string(),
-    ];
-
-    let found_sumatra = sumatra_paths.iter().find(|p| std::path::Path::new(p).exists());
-
-    if let Some(sumatra_exe) = found_sumatra {
-        let mut cmd = Command::new(sumatra_exe);
+    if let Some(sumatra_exe) = find_sumatra() {
+        let mut cmd = Command::new(&sumatra_exe);
         cmd.creation_flags(CREATE_NO_WINDOW);
         if target_printer.is_empty() {
             cmd.args(["-print-to-default", "-silent", file_path]);
@@ -347,20 +424,27 @@ fn configure_startup_shortcut(enable: bool) {
 
 fn start_http_listener(
     port: u16,
-    is_running: Arc<AtomicBool>,
     logs: Arc<Mutex<Vec<PrintLogItem>>>,
     selected_printer: Arc<Mutex<String>>,
     cache: Arc<Mutex<CachedData>>,
     app_handle: Arc<Mutex<Option<tauri::AppHandle>>>,
-) -> Result<thread::JoinHandle<()>, String> {
+) -> Result<RunningServer, String> {
     let addr = format!("0.0.0.0:{}", port);
-    let server = Server::http(&addr).map_err(|e| format!("Gagal bind port {}: {}", port, e))?;
+    let server = Server::http(&addr).map_err(|e| {
+        format!("Port {} sedang dipakai aplikasi lain (atau SIAP Print lain masih berjalan): {}", port, e)
+    })?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
 
     let handle = thread::spawn(move || {
-        while is_running.load(Ordering::SeqCst) {
+        while !stop_flag.load(Ordering::SeqCst) {
             if let Ok(Some(mut request)) = server.recv_timeout(std::time::Duration::from_millis(500)) {
-                let url = request.url().to_string();
+                // Abaikan query string & garis miring akhir: "/ping/", "/ping?x=1" tetap dikenali
+                let raw_url = request.url().to_string();
+                let path = raw_url.split('?').next().unwrap_or("/").trim_end_matches('/');
+                let url = if path.is_empty() { "/".to_string() } else { path.to_string() };
                 let method = request.method().clone();
+                let json_ct = || Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
 
                 let cors_origin = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
                 let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Origin, Content-Type, Accept, Authorization"[..]).unwrap();
@@ -390,9 +474,11 @@ fn start_http_listener(
                     let curr_printer = selected_printer.lock().unwrap().clone();
                     let json = serde_json::json!({
                         "status": "online",
+                        "version": env!("CARGO_PKG_VERSION"),
                         "port": port,
                         "tailscaleIp": c.tailscale_ip,
                         "tailscaleFunnelDomain": c.tailscale_funnel_domain,
+                        "funnelActive": c.tailscale_funnel_domain.is_some(),
                         "localIp": c.local_ip,
                         "selectedPrinter": curr_printer
                     });
@@ -418,8 +504,10 @@ fn start_http_listener(
                 if url == "/print-pdf" && method == Method::Post {
                     let mut body_str = String::new();
                     if let Err(_) = request.as_reader().read_to_string(&mut body_str) {
-                        let mut resp = Response::from_string(r#"{"success":false,"error":"Gagal membaca body request"}"#);
+                        let mut resp = Response::from_string(r#"{"success":false,"error":"Gagal membaca body request"}"#)
+                            .with_status_code(StatusCode(400));
                         resp.add_header(cors_origin);
+                        resp.add_header(json_ct());
                         let _ = request.respond(resp);
                         continue;
                     }
@@ -436,7 +524,7 @@ fn start_http_listener(
                     match parsed {
                         Ok(payload) if payload.pdf_base64.is_some() => {
                             let base64_data = payload.pdf_base64.unwrap();
-                            let req_printer = payload.printer_name.unwrap_or_default();
+                            let req_printer = bare_printer_name(&payload.printer_name.unwrap_or_default());
                             let default_printer = selected_printer.lock().unwrap().clone();
                             let final_printer = if !req_printer.is_empty() { req_printer } else { default_printer };
                             let doc_name = payload.filename.unwrap_or_else(|| "Dokumen.pdf".to_string());
@@ -450,8 +538,10 @@ fn start_http_listener(
 
                                     if let Err(write_err) = fs::write(&temp_file_path, bytes) {
                                         let err_msg = format!("Gagal menyimpan PDF sementara: {}", write_err);
-                                        let mut resp = Response::from_string(serde_json::json!({"success":false,"error": err_msg}).to_string());
+                                        let mut resp = Response::from_string(serde_json::json!({"success":false,"error": err_msg}).to_string())
+                                            .with_status_code(StatusCode(500));
                                         resp.add_header(cors_origin);
+                                        resp.add_header(json_ct());
                                         let _ = request.respond(resp);
                                         continue;
                                     }
@@ -496,40 +586,107 @@ fn start_http_listener(
                                     let resp_json = serde_json::json!({
                                         "success": success,
                                         "message": log_msg,
+                                        "error": if success { serde_json::Value::Null } else { serde_json::Value::String(log_msg.clone()) },
                                         "printer": final_printer,
                                         "filename": doc_name
                                     });
-                                    let mut resp = Response::from_string(resp_json.to_string());
+                                    let mut resp = Response::from_string(resp_json.to_string())
+                                        .with_status_code(StatusCode(if success { 200 } else { 500 }));
                                     resp.add_header(cors_origin);
                                     resp.add_header(cors_pna);
-                                    resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                                    resp.add_header(json_ct());
                                     let _ = request.respond(resp);
                                 }
                                 Err(decode_err) => {
                                     let err_msg = format!("Format Base64 PDF tidak valid: {}", decode_err);
-                                    let mut resp = Response::from_string(serde_json::json!({"success":false,"error": err_msg}).to_string());
+                                    let mut resp = Response::from_string(serde_json::json!({"success":false,"error": err_msg}).to_string())
+                                        .with_status_code(StatusCode(400));
                                     resp.add_header(cors_origin);
+                                    resp.add_header(json_ct());
                                     let _ = request.respond(resp);
                                 }
                             }
                         }
                         _ => {
-                            let mut resp = Response::from_string(r#"{"success":false,"error":"Body harus berisi pdfBase64"}"#);
+                            let mut resp = Response::from_string(r#"{"success":false,"error":"Body harus berisi pdfBase64"}"#)
+                                .with_status_code(StatusCode(400));
                             resp.add_header(cors_origin);
+                            resp.add_header(json_ct());
                             let _ = request.respond(resp);
                         }
                     }
                     continue;
                 }
 
-                let mut resp = Response::from_string("Not Found");
+                let mut resp = Response::from_string("Not Found").with_status_code(StatusCode(404));
                 resp.add_header(cors_origin);
                 let _ = request.respond(resp);
             }
         }
+        // `server` di-drop di sini sehingga port langsung dilepas
     });
 
-    Ok(handle)
+    Ok(RunningServer { stop, handle })
+}
+
+/// Menghentikan server yang berjalan dan MENUNGGU thread-nya selesai (≤ 0,5 detik)
+/// agar port benar-benar bebas sebelum dinyalakan ulang.
+fn stop_server(slot: &Mutex<Option<RunningServer>>) {
+    let running = slot.lock().unwrap().take();
+    if let Some(srv) = running {
+        srv.stop.store(true, Ordering::SeqCst);
+        let _ = srv.handle.join();
+    }
+}
+
+fn start_server(state: &AppState, port: u16) -> Result<(), String> {
+    stop_server(&state.server);
+    match start_http_listener(
+        port,
+        Arc::clone(&state.logs),
+        Arc::clone(&state.selected_printer),
+        Arc::clone(&state.cache),
+        Arc::clone(&state.app_handle),
+    ) {
+        Ok(srv) => {
+            *state.server.lock().unwrap() = Some(srv);
+            state.is_running.store(true, Ordering::SeqCst);
+            *state.server_error.lock().unwrap() = None;
+            Ok(())
+        }
+        Err(e) => {
+            state.is_running.store(false, Ordering::SeqCst);
+            *state.server_error.lock().unwrap() = Some(e.clone());
+            Err(e)
+        }
+    }
+}
+
+/// Menjalankan perintah dengan batas waktu (tanpa jendela). Mengembalikan (berhasil, keluaran gabungan).
+fn run_with_timeout(program: &str, args: &[&str], secs: u64) -> Result<(bool, String), String> {
+    let child = Command::new(program)
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Gagal menjalankan {}: {}", program, e))?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
+        Ok(Ok(out)) => {
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            Ok((out.status.success(), text.trim().to_string()))
+        }
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err("timeout".to_string()),
+    }
 }
 
 // INSTANT in-memory state retrieval (0 processes, 0 cmd, 0 powershell)
@@ -547,19 +704,24 @@ fn get_app_status(state: State<AppState>) -> AppStatus {
         port,
         tailscale_ip: cache.tailscale_ip,
         tailscale_funnel_domain: cache.tailscale_funnel_domain,
+        tailscale_dns_name: cache.tailscale_dns_name,
+        funnel_target_port: cache.funnel_target_port,
         local_ip: cache.local_ip,
         hostname: cache.hostname,
         selected_printer,
         auto_start_startup,
         printers: cache.printers,
         logs,
+        firewall_ok: cache.firewall_ok && cache.firewall_port == port,
+        sumatra_path: cache.sumatra_path,
+        server_error: state.server_error.lock().unwrap().clone(),
     }
 }
 
 // Explicit refresh button: Only runs when user specifically clicks "Refresh" (with CREATE_NO_WINDOW)
 #[tauri::command]
 fn refresh_system_info(state: State<AppState>) -> AppStatus {
-    let new_cache = query_system_info_silent();
+    let new_cache = query_system_info_silent(state.port.load(Ordering::SeqCst));
     *state.cache.lock().unwrap() = new_cache;
     get_app_status(state)
 }
@@ -568,27 +730,83 @@ fn refresh_system_info(state: State<AppState>) -> AppStatus {
 fn toggle_server(enable: bool, state: State<AppState>) -> Result<bool, String> {
     if enable {
         if !state.is_running.load(Ordering::SeqCst) {
-            let port = state.port.load(Ordering::SeqCst);
-            state.is_running.store(true, Ordering::SeqCst);
-            let handle = start_http_listener(
-                port,
-                Arc::clone(&state.is_running),
-                Arc::clone(&state.logs),
-                Arc::clone(&state.selected_printer),
-                Arc::clone(&state.cache),
-                Arc::clone(&state.app_handle),
-            )?;
-            *state.server_handle.lock().unwrap() = Some(handle);
+            start_server(&state, state.port.load(Ordering::SeqCst))?;
         }
     } else {
         state.is_running.store(false, Ordering::SeqCst);
-        *state.server_handle.lock().unwrap() = None;
+        stop_server(&state.server);
     }
     Ok(state.is_running.load(Ordering::SeqCst))
 }
 
+/// Menambahkan aturan inbound Windows Firewall untuk port server (meminta izin Administrator/UAC).
+/// Dibutuhkan agar HP bisa terhubung lewat IP Tailscale dan IP LAN. Jalur Funnel tidak membutuhkannya.
+#[tauri::command]
+fn allow_firewall(state: State<AppState>) -> Result<AppStatus, String> {
+    let port = state.port.load(Ordering::SeqCst);
+    let name = firewall_rule_name(port);
+    let inner = format!(
+        "netsh advfirewall firewall delete rule name=\"{name}\" | Out-Null; netsh advfirewall firewall add rule name=\"{name}\" dir=in action=allow protocol=TCP localport={port} profile=any | Out-Null",
+    );
+    let outer = format!(
+        "Start-Process -FilePath powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-EncodedCommand','{}'",
+        ps_encoded(&inner)
+    );
+    let res = run_with_timeout("powershell", &["-NoProfile", "-Command", &outer], 120);
+    let ok = firewall_rule_exists(port);
+    {
+        let mut c = state.cache.lock().unwrap();
+        c.firewall_ok = ok;
+        c.firewall_port = port;
+    }
+    if ok {
+        Ok(get_app_status(state))
+    } else {
+        match res {
+            Ok((_, out)) if !out.is_empty() => Err(format!("Aturan firewall belum dibuat: {}", out)),
+            Err(e) => Err(format!("Aturan firewall belum dibuat: {}", e)),
+            _ => Err("Aturan firewall belum dibuat (izin Administrator ditolak?)".to_string()),
+        }
+    }
+}
+
+/// Menjalankan `tailscale funnel --bg <port>` lalu memperbarui status Funnel.
+#[tauri::command]
+fn enable_funnel(state: State<AppState>) -> Result<AppStatus, String> {
+    let port = state.port.load(Ordering::SeqCst);
+    let port_str = port.to_string();
+    let mut last_err = String::from("Tailscale tidak ditemukan di PC ini");
+    for p in TAILSCALE_PATHS {
+        match run_with_timeout(p, &["funnel", "--bg", &port_str], 25) {
+            Ok((true, _)) => {
+                let new_cache = query_system_info_silent(port);
+                let active = new_cache.tailscale_funnel_domain.is_some();
+                *state.cache.lock().unwrap() = new_cache;
+                if active {
+                    return Ok(get_app_status(state));
+                }
+                last_err = "Perintah selesai tetapi Funnel belum aktif. Pastikan Funnel diizinkan di admin console Tailscale.".to_string();
+                break;
+            }
+            Ok((false, out)) => {
+                last_err = if out.is_empty() { "Tailscale menolak perintah funnel".to_string() } else { out };
+                break;
+            }
+            Err(e) if e == "timeout" => {
+                last_err = "Tailscale meminta persetujuan Funnel. Jalankan 'tailscale funnel --bg ".to_string()
+                    + &port_str
+                    + "' di Command Prompt untuk melihat tautan persetujuannya.";
+                break;
+            }
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
+}
+
 #[tauri::command]
 fn save_printer_default(printer_name: String, state: State<AppState>) -> Result<String, String> {
+    let printer_name = bare_printer_name(&printer_name);
     *state.selected_printer.lock().unwrap() = printer_name.clone();
 
     let cfg = AppConfig {
@@ -621,20 +839,15 @@ fn update_settings(
     save_config(&cfg);
     configure_startup_shortcut(auto_start);
 
-    if state.is_running.load(Ordering::SeqCst) && old_port != new_port {
-        state.is_running.store(false, Ordering::SeqCst);
-        *state.server_handle.lock().unwrap() = None;
-        thread::sleep(std::time::Duration::from_millis(300));
-        state.is_running.store(true, Ordering::SeqCst);
-        let handle = start_http_listener(
-            new_port,
-            Arc::clone(&state.is_running),
-            Arc::clone(&state.logs),
-            Arc::clone(&state.selected_printer),
-            Arc::clone(&state.cache),
-            Arc::clone(&state.app_handle),
-        )?;
-        *state.server_handle.lock().unwrap() = Some(handle);
+    if old_port != new_port {
+        {
+            let mut c = state.cache.lock().unwrap();
+            c.firewall_ok = firewall_rule_exists(new_port);
+            c.firewall_port = new_port;
+        }
+        if state.is_running.load(Ordering::SeqCst) {
+            start_server(&state, new_port)?;
+        }
     }
 
     Ok(get_app_status(state))
@@ -724,15 +937,15 @@ fn open_tailscale() -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let saved_cfg = load_config();
-    let is_running = Arc::new(AtomicBool::new(true));
+    let is_running = Arc::new(AtomicBool::new(false));
     let port = Arc::new(AtomicU16::new(saved_cfg.port));
-    let selected_printer = Arc::new(Mutex::new(saved_cfg.selected_printer.clone()));
+    let selected_printer = Arc::new(Mutex::new(bare_printer_name(&saved_cfg.selected_printer)));
     let auto_start_startup = Arc::new(AtomicBool::new(saved_cfg.auto_start_startup));
     let logs = Arc::new(Mutex::new(Vec::new()));
     let app_handle_holder = Arc::new(Mutex::new(None));
 
     // Read initial system info ONCE silently with CREATE_NO_WINDOW
-    let initial_cache = query_system_info_silent();
+    let initial_cache = query_system_info_silent(saved_cfg.port);
 
     if saved_cfg.selected_printer.is_empty() {
         if let Some(def) = initial_cache.printers.iter().find(|p| p.is_default) {
@@ -744,21 +957,6 @@ pub fn run() {
 
     let cache = Arc::new(Mutex::new(initial_cache));
 
-    let server_handle = match start_http_listener(
-        saved_cfg.port,
-        Arc::clone(&is_running),
-        Arc::clone(&logs),
-        Arc::clone(&selected_printer),
-        Arc::clone(&cache),
-        Arc::clone(&app_handle_holder),
-    ) {
-        Ok(h) => Arc::new(Mutex::new(Some(h))),
-        Err(e) => {
-            eprintln!("Warning: could not auto start server: {}", e);
-            Arc::new(Mutex::new(None))
-        }
-    };
-
     let app_state = AppState {
         is_running,
         port,
@@ -766,9 +964,13 @@ pub fn run() {
         auto_start_startup,
         logs,
         cache,
-        server_handle,
+        server: Arc::new(Mutex::new(None)),
+        server_error: Arc::new(Mutex::new(None)),
         app_handle: Arc::clone(&app_handle_holder),
     };
+    if let Err(e) = start_server(&app_state, saved_cfg.port) {
+        eprintln!("Warning: could not auto start server: {}", e);
+    }
 
     tauri::Builder::default()
         .manage(app_state)
@@ -845,7 +1047,9 @@ pub fn run() {
             save_printer_default,
             test_print,
             clear_logs,
-            open_tailscale
+            open_tailscale,
+            allow_firewall,
+            enable_funnel
         ])
         .run(tauri::generate_context!())
         .expect("error while running SIAP Print Tailscale");

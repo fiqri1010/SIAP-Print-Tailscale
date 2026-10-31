@@ -1,85 +1,94 @@
 # SIAP Print Tailscale 🖨️🔒
 
-**SIAP Print Tailscale** adalah aplikasi desktop Windows modern dan ringan berbasis **Tauri v2 (Rust + Vanilla JS)** yang dirancang khusus untuk menjadi jembatan cetak dokumen resmi (PIB, Dokap, dan Berita Acara Pemeriksaan / BAP) dari aplikasi **SIAP NEO Mobile** (KPU Bea Cukai Tanjung Priok) ke printer kantor (seperti Kyocera TASKalfa, HP, Canon, Epson) melalui jaringan aman **Tailscale** atau WiFi lokal.
+**SIAP Print Tailscale** adalah aplikasi desktop Windows ringan berbasis **Tauri v2 (Rust + Vanilla JS)**. Aplikasi ini menjadi jembatan cetak dokumen resmi (PIB, Dokap, dan Berita Acara Pemeriksaan / BAP) dari aplikasi **SIAP NEO** (KPU Bea Cukai Tanjung Priok) ke printer kantor (mis. Kyocera TASKalfa). Jalur yang didukung: **Tailscale Funnel**, **IP Tailscale**, atau **Wi-Fi kantor**.
+
+Versi saat ini: **1.2.0**
 
 ---
 
 ## Fitur Utama
 
-- 🔒 **Deteksi Otomatis Tailscale IP**: Otomatis mendeteksi IP `100.x.y.z` jika Tailscale aktif di PC.
-- 🌐 **Deteksi Otomatis Local LAN IP**: Otomatis mendeteksi IP jaringan kantor (`192.168.x.x`).
-- ⚡ **Pengaturan Port Dinamis**: Konfigurasi port listening HTTP (default `1234`) langsung dari UI dengan restart server otomatis.
-- 📄 **Deteksi Seluruh Printer Windows**: Menampilkan semua printer fisik dan virtual yang terpasang di Windows (Kyocera TASKalfa, Print to PDF, dll).
-- 🖨️ **Uji Coba Cetak (Test Print)**: Menguji koneksi printer secara langsung dari aplikasi sebelum dipakai oleh petugas di lapangan.
-- 📋 **Riwayat Cetak Real-Time**: Log visual yang mencatat setiap dokumen PIB atau BAP yang diterima dari HP petugas.
-- 🚀 **Super Ringan & Mandiri**: Dibangun dengan Rust + Tauri, hanya berukuran belasan MB, hemat RAM (<30MB), dan dapat dijalankan langsung (`.exe`).
+- 🚀 **Tailscale Funnel (HTTPS publik)**: hanya ditampilkan bila Funnel **benar-benar aktif** (termasuk mode `--bg`). Tombol **Aktifkan Funnel** menjalankan `tailscale funnel --bg <port>`.
+- 🔒 **IP Tailscale** dan 🌐 **IP LAN**: ditampilkan **hanya IP-nya** (tanpa `http://` dan `:port`), sama dengan kolom isian di SIAP NEO. Port ditampilkan terpisah.
+- 🛡️ **Windows Firewall**: peringatan bila port belum diizinkan, beserta tombol **Izinkan di Firewall** (meminta izin Administrator). Tanpa aturan ini HP tidak bisa masuk lewat IP Tailscale / IP LAN. Jalur Funnel tidak membutuhkannya.
+- ⚡ **Port dinamis**: default `1234`. Server lama dihentikan sepenuhnya sebelum dinyalakan ulang sehingga tidak bentrok port.
+- 🖨️ **Printer fisik saja**: printer virtual PDF/XPS/OneNote/Fax disaring. Printer default disimpan permanen.
+- 📄 **Cetak senyap via SumatraPDF**, dengan fallback Windows Shell. Muncul peringatan bila SumatraPDF tidak ditemukan.
+- 📋 **Riwayat cetak real-time** untuk setiap dokumen dari SIAP NEO.
+- 🧩 **System tray** dan mulai otomatis saat Windows menyala (`--hidden`).
 
 ---
 
-## File Eksekusi Siap Pakai
+## Menghubungkan SIAP NEO
 
-File eksekusi mandiri (*standalone executable*) sudah tersedia di root repositori:
-```text
-C:\Repo\SIAP-Print-Tailscale\SIAP-Print-Tailscale.exe
-```
-Tinggal *double-click* file tersebut untuk menjalankan server.
+Di HP buka **Akun › Printer kantor**, lalu isi:
+
+| Kolom di SIAP NEO | Isi dengan | Syarat |
+|---|---|---|
+| URL Funnel | `https://<nama-pc>.<tailnet>.ts.net` | Funnel aktif (kartu Funnel tidak menampilkan peringatan) |
+| IP Tailscale | contoh `100.113.7.91` | Aplikasi Tailscale aktif di HP + firewall diizinkan |
+| IP LAN | contoh `192.168.38.145` | HP satu Wi-Fi dengan PC + firewall diizinkan |
+| Port | `1234` | Sama dengan port di aplikasi ini |
+
+Pilih mode **Otomatis** agar SIAP NEO mencoba Funnel → IP Tailscale → IP LAN, lalu tekan **Tes Koneksi**.
+
+---
+
+## File Eksekusi
+
+- `SIAP-Print-Tailscale.exe` (root repositori): versi terbaru, ditandatangani.
+- Berkas berversi (`SIAP-Print-Tailscale-v1.2.0-windows-x64.exe`) tersedia di halaman GitHub Releases.
 
 ---
 
 ## API Endpoints untuk SIAP NEO
 
-Aplikasi ini mendengarkan request HTTP di port yang ditentukan (default `1234`):
+Server mendengarkan di `0.0.0.0:<port>` (default `1234`). Query string dan garis miring akhir diabaikan (`/ping/` = `/ping`).
 
-1. **`GET /ping`**
-   - Health check sederhana.
-   - Respon: `"🖨️ SIAP Print Server is running"`
+1. **`GET /ping`**: health check. Respon: `🖨️ SIAP Print Server is running`.
+2. **`GET /info`**:
+   ```json
+   {
+     "status": "online",
+     "version": "1.2.0",
+     "port": 1234,
+     "tailscaleIp": "100.113.7.91",
+     "tailscaleFunnelDomain": "pc.tailnet.ts.net",
+     "funnelActive": true,
+     "localIp": "192.168.38.145",
+     "selectedPrinter": "Kyocera TASKalfa MZ3200i KX"
+   }
+   ```
+   `tailscaleFunnelDomain` bernilai `null` bila Funnel tidak aktif.
+3. **`GET /printers`**: array `{ "name", "driver", "port", "is_default" }`.
+4. **`POST /print-pdf`**:
+   ```json
+   { "printerName": "Kyocera TASKalfa MZ3200i KX", "filename": "BAP_123456.pdf", "pdfBase64": "JVBERi0xLjQK..." }
+   ```
+   `printerName` kosong berarti memakai printer default yang dipilih di aplikasi ini.
 
-2. **`GET /info`**
-   - Informasi status server, IP Tailscale, IP Local, dan printer aktif.
-   - Respon JSON:
-     ```json
-     {
-       "status": "online",
-       "port": 1234,
-       "tailscaleIp": "100.85.20.10",
-       "localIp": "192.168.38.15",
-       "selectedPrinter": "Kyocera TASKalfa MZ3200i KX"
-     }
-     ```
-
-3. **`GET /printers`**
-   - Mengambil daftar printer terpasang di sistem operasi Windows.
-
-4. **`POST /print-pdf`** (Endpoint Utama Cetak Dokumen)
-   - Menerima file PDF dokumen resmi dalam format Base64 dan langsung mencetaknya secara senyap (*silent*) ke printer Windows.
-   - Body Request JSON:
-     ```json
-     {
-       "printerName": "Kyocera TASKalfa MZ3200i KX",
-       "filename": "PIB_123456.pdf",
-       "pdfBase64": "JVBERi0xLjQK..."
-     }
-     ```
-   - Respon JSON:
-     ```json
-     {
-       "success": true,
-       "message": "Dicetak via SumatraPDF",
-       "printer": "Kyocera TASKalfa MZ3200i KX",
-       "filename": "PIB_123456.pdf"
-     }
-     ```
+   | Kondisi | HTTP | Body |
+   |---|---|---|
+   | Berhasil | 200 | `{"success":true,"message":"Dicetak via SumatraPDF",...}` |
+   | Body/Base64 salah | 400 | `{"success":false,"error":"..."}` |
+   | Gagal mencetak | 500 | `{"success":false,"error":"...",...}` |
+   | Path tidak dikenal | 404 | `Not Found` |
 
 ---
 
-## Cara Kompilasi Ulang (Developer)
+## Kompilasi Ulang (Developer)
 
-Jika ingin memodifikasi tampilan atau fungsi di PC lain:
-1. Pastikan **Rust** dan **Node.js** terpasang.
-2. Jalankan:
-   ```powershell
-   cd C:\Repo\SIAP-Print-Tailscale
-   npm install
-   npm run tauri dev      # Untuk mode pengembangan langsung
-   npm run tauri build    # Untuk membuat installer / release .exe
-   ```
+Prasyarat: Rust dan Node.js.
+
+```powershell
+cd C:\Repo\SIAP-Print-Tailscale
+npm install
+npx tauri dev                 # mode pengembangan
+npx tauri build --no-bundle   # src-tauri\target\release\siap-print-tailscale.exe
+```
+
+Penandatanganan (sertifikat Code Signing "Jadwal Priok Developer"):
+
+```powershell
+signtool sign /sha1 E8692153EDD5AED0C4CE9FE300D0991757F0467B /fd sha256 /tr http://timestamp.digicert.com /td sha256 SIAP-Print-Tailscale.exe
+```

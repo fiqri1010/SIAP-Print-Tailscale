@@ -27,3 +27,6 @@ src-tauri/gen/schemas/
 *.njsproj
 *.sln
 *.sw?
+
+# Exe berversi hanya untuk GitHub Releases
+SIAP-Print-Tailscale-v*.exe
