@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SIAP Print Tailscale - KPU Bea Cukai Tanjung Priok</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Bar -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-icon">🖨️</div>
+        <div>
+          <h1 class="brand-title">SIAP Print Tailscale</h1>
+          <p class="brand-subtitle">KPU Bea Cukai Tanjung Priok • Jembatan Cetak Dokumen Resmi</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div id="server-status-pill" class="status-pill status-running">
+          <span class="status-dot"></span>
+          <span id="server-status-text">Server Aktif</span>
+        </div>
+        <button id="btn-toggle-server" class="btn btn-secondary">Matikan Server</button>
+      </div>
+    </header>
+
+    <!-- Main Content Grid -->
+    <main class="app-main">
+      <!-- Network Detection Grid -->
+      <section class="network-grid">
+        <!-- Tailscale IP Card -->
+        <div class="card card-highlight">
+          <div class="card-header">
+            <span class="card-icon">🔒</span>
+            <h3>Tailscale IP (Remote / 4G)</h3>
+          </div>
+          <div class="card-body">
+            <div id="tailscale-ip-display" class="ip-address">Mendeteksi...</div>
+            <p class="card-hint">Gunakan URL ini di aplikasi SIAP NEO jika mencetak dari luar kantor:</p>
+            <div class="url-copy-box">
+              <input type="text" id="tailscale-url-input" readonly value="http://..." />
+              <button id="btn-copy-ts" class="btn btn-small btn-primary">Salin</button>
+            </div>
+            <div id="tailscale-warning" class="alert-box alert-warning hidden">
+              ⚠️ Tailscale belum aktif atau belum login di PC ini.
+              <button id="btn-open-ts" class="btn btn-tiny btn-outline">Buka Tailscale</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Local LAN IP Card -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-icon">🌐</span>
+            <h3>Local LAN IP (Satu WiFi)</h3>
+          </div>
+          <div class="card-body">
+            <div id="local-ip-display" class="ip-address">Mendeteksi...</div>
+            <p class="card-hint">Gunakan URL ini jika HP Android terhubung ke WiFi kantor yang sama:</p>
+            <div class="url-copy-box">
+              <input type="text" id="local-url-input" readonly value="http://..." />
+              <button id="btn-copy-lan" class="btn btn-small btn-secondary">Salin</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Port Setting Card -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-icon">⚙️</span>
+            <h3>Port HTTP Server</h3>
+          </div>
+          <div class="card-body">
+            <label for="input-port" class="field-label">Port Listening:</label>
+            <div class="port-input-row">
+              <input type="number" id="input-port" min="1024" max="65535" value="1234" />
+              <button id="btn-save-port" class="btn btn-primary">Terapkan</button>
+            </div>
+            <p class="card-hint text-muted">Pastikan port ini diizinkan di Windows Firewall.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Printer Management Section -->
+      <section class="card printer-card">
+        <div class="card-header space-between">
+          <div class="header-left">
+            <span class="card-icon">📄</span>
+            <div>
+              <h3>Pengaturan Printer Windows</h3>
+              <p class="card-hint">Pilih printer fisik di PC ini untuk mencetak dokumen PIB, Dokap, dan BAP.</p>
+            </div>
+          </div>
+          <div class="header-right">
+            <button id="btn-refresh-printers" class="btn btn-small btn-outline">🔄 Refresh</button>
+            <button id="btn-test-print" class="btn btn-small btn-success">🖨️ Uji Cetak (Test)</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="printer-selector-row">
+            <select id="select-printer" class="select-field">
+              <option value="">Memuat printer terpasang...</option>
+            </select>
+          </div>
+          <div id="printer-meta-info" class="meta-tags"></div>
+        </div>
+      </section>
+
+      <!-- Petunjuk Singkat SIAP NEO -->
+      <div class="info-banner">
+        <strong>💡 Petunjuk Penggunaan untuk SIAP NEO:</strong>
+        Buka menu <em>Pengaturan / Profil</em> di aplikasi SIAP NEO, lalu masukkan URL Tailscale di atas ke dalam kolom <strong>IP Printer Kantor</strong>. Setiap dokumen PIB atau BAP yang ditekan tombol cetak akan langsung keluar di printer ini.
+      </div>
+
+      <!-- Live Logs Section -->
+      <section class="card logs-card">
+        <div class="card-header space-between">
+          <div class="header-left">
+            <span class="card-icon">📋</span>
+            <h3>Riwayat Cetak Dokumen Real-Time</h3>
+          </div>
+          <div class="header-right">
+            <button id="btn-clear-logs" class="btn btn-tiny btn-outline">Bersihkan Riwayat</button>
+          </div>
+        </div>
+        <div class="card-body no-padding">
+          <div class="table-responsive">
+            <table class="logs-table">
+              <thead>
+                <tr>
+                  <th>Waktu</th>
+                  <th>Nama Dokumen</th>
+                  <th>Printer Tujuan</th>
+                  <th>Status</th>
+                  <th>Keterangan</th>
+                </tr>
+              </thead>
+              <tbody id="logs-tbody">
+                <tr>
+                  <td colspan="5" class="text-center text-muted empty-state">Belum ada dokumen yang dicetak.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast hidden"></div>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>
