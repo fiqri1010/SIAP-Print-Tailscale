@@ -42,12 +42,18 @@ const btnAllowFirewall = document.getElementById('btn-allow-firewall');
 const serverErrorBanner = document.getElementById('server-error-banner');
 const sumatraBanner = document.getElementById('sumatra-banner');
 
+const chkKeepFunnel = document.getElementById('chk-keep-funnel');
+const peerList = document.getElementById('peer-list');
+const lastRequestEl = document.getElementById('last-request');
+
 const logsTbody = document.getElementById('logs-tbody');
 const btnClearLogs = document.getElementById('btn-clear-logs');
 const toastEl = document.getElementById('toast');
 
 let currentStatus = null;
 let isUserEditingPort = false;
+
+const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // Toast Notification
 function showToast(message, duration = 3000) {
@@ -109,6 +115,14 @@ function renderStatus(status) {
   localIpDisplay.textContent = status.local_ip || '127.0.0.1';
   localUrlInput.value = status.local_ip || '127.0.0.1';
   portValueEls.forEach((el) => { el.textContent = status.port; });
+
+  // Pulihkan Funnel otomatis, perangkat tailnet, permintaan terakhir
+  chkKeepFunnel.checked = !!status.keep_funnel;
+  const peers = status.peers || [];
+  peerList.innerHTML = peers.length === 0
+    ? '<span class="tag">Tidak ada perangkat lain di tailnet</span>'
+    : peers.map((p) => `<span class="tag" style="color:${p.online ? '#14532d' : '#7f1d1d'};font-weight:600;">${p.online ? '🟢' : '🔴'} ${esc(p.name)} (${esc(p.os || '-')}) ${esc(p.ip || '')} • ${p.online ? 'online' : 'offline'}</span>`).join(' ');
+  lastRequestEl.textContent = status.last_request ? `Permintaan terakhir: ${status.last_request}` : 'Belum ada permintaan dari HP';
 
   // Firewall, error server, SumatraPDF
   firewallText.textContent = `⚠️ Windows Firewall belum mengizinkan port ${status.port}. HP tidak bisa terhubung lewat IP Tailscale / IP LAN (jalur Funnel tetap bisa).`;
@@ -248,6 +262,16 @@ btnEnableFunnel.addEventListener('click', async () => {
   } finally {
     btnEnableFunnel.disabled = false;
     btnEnableFunnel.textContent = 'Aktifkan Funnel';
+  }
+});
+
+chkKeepFunnel.addEventListener('change', async () => {
+  try {
+    const status = await invoke('set_keep_funnel', { enable: chkKeepFunnel.checked });
+    renderStatus(status);
+    showToast(chkKeepFunnel.checked ? 'Funnel akan dipulihkan otomatis bila hilang.' : 'Pemulihan Funnel otomatis dimatikan.');
+  } catch (err) {
+    showToast('Gagal menyimpan: ' + err);
   }
 });
 

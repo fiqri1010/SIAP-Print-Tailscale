@@ -39,6 +39,17 @@ pub struct AppConfig {
     pub port: u16,
     pub selected_printer: String,
     pub auto_start_startup: bool,
+    /// Aktifkan ulang Funnel otomatis bila hilang (mis. setelah `tailscale reset`). Diatur pengguna.
+    #[serde(default)]
+    pub keep_funnel: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct PeerInfo {
+    pub name: String,
+    pub os: String,
+    pub ip: String,
+    pub online: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -57,6 +68,8 @@ pub struct CachedData {
     pub firewall_ok: bool,
     pub firewall_port: u16,
     pub sumatra_path: Option<String>,
+    /// Perangkat lain di tailnet (untuk melihat apakah HP online di Tailscale).
+    pub peers: Vec<PeerInfo>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -76,6 +89,9 @@ pub struct AppStatus {
     pub firewall_ok: bool,
     pub sumatra_path: Option<String>,
     pub server_error: Option<String>,
+    pub keep_funnel: bool,
+    pub last_request: Option<String>,
+    pub peers: Vec<PeerInfo>,
 }
 
 /// Server HTTP yang sedang berjalan: flag berhenti miliknya sendiri + handle thread,
@@ -95,6 +111,9 @@ pub struct AppState {
     pub server: Arc<Mutex<Option<RunningServer>>>,
     pub server_error: Arc<Mutex<Option<String>>>,
     pub app_handle: Arc<Mutex<Option<tauri::AppHandle>>>,
+    pub keep_funnel: Arc<AtomicBool>,
+    /// Permintaan terakhir yang diterima server (untuk diagnosis koneksi dari HP).
+    pub last_request: Arc<Mutex<Option<String>>>,
 }
 
 const TAILSCALE_PATHS: [&str; 2] = ["C:\\Program Files\\Tailscale\\tailscale.exe", "tailscale.exe"];
@@ -195,6 +214,7 @@ fn load_config() -> AppConfig {
         port: 1234,
         selected_printer: String::new(),
         auto_start_startup: false,
+        keep_funnel: false,
     }
 }
 
@@ -238,6 +258,7 @@ fn query_system_info_silent(port: u16) -> CachedData {
     let mut tailscale_funnel_domain: Option<String> = None;
     let mut tailscale_dns_name: Option<String> = None;
     let mut funnel_target_port: Option<u16> = None;
+    let mut peers: Vec<PeerInfo> = Vec::new();
 
     for p in TAILSCALE_PATHS {
         // 1. IP Tailscale (100.x.x.x)
@@ -284,6 +305,21 @@ fn query_system_info_silent(port: u16) -> CachedData {
                         let trimmed = dns.trim_end_matches('.');
                         if !trimmed.is_empty() {
                             tailscale_dns_name = Some(trimmed.to_string());
+                        }
+                    }
+                    if let Some(peer_map) = val.get("Peer").and_then(|p| p.as_object()) {
+                        for pv in peer_map.values() {
+                            let name = pv.get("HostName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            if name.is_empty() {
+                                continue;
+                            }
+                            peers.push(PeerInfo {
+                                name,
+                                os: pv.get("OS").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                ip: pv.get("TailscaleIPs").and_then(|v| v.as_array()).and_then(|a| a.first())
+                                    .and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                online: pv.get("Online").and_then(|v| v.as_bool()).unwrap_or(false),
+                            });
                         }
                     }
                 }
@@ -358,6 +394,7 @@ fn query_system_info_silent(port: u16) -> CachedData {
         firewall_ok: firewall_rule_exists(port),
         firewall_port: port,
         sumatra_path: find_sumatra(),
+        peers,
     }
 }
 
@@ -424,6 +461,7 @@ fn configure_startup_shortcut(enable: bool) {
 
 fn start_http_listener(
     port: u16,
+    last_request: Arc<Mutex<Option<String>>>,
     logs: Arc<Mutex<Vec<PrintLogItem>>>,
     selected_printer: Arc<Mutex<String>>,
     cache: Arc<Mutex<CachedData>>,
@@ -444,6 +482,16 @@ fn start_http_listener(
                 let path = raw_url.split('?').next().unwrap_or("/").trim_end_matches('/');
                 let url = if path.is_empty() { "/".to_string() } else { path.to_string() };
                 let method = request.method().clone();
+                if method != Method::Options {
+                    let from = match request.remote_addr() {
+                        Some(a) if a.ip().is_loopback() => "Funnel/PC ini".to_string(),
+                        Some(a) => a.ip().to_string(),
+                        None => "-".to_string(),
+                    };
+                    if let Ok(mut lr) = last_request.lock() {
+                        *lr = Some(format!("{} {} {} dari {}", current_time_str(), method, url, from));
+                    }
+                }
                 let json_ct = || Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
 
                 let cors_origin = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
@@ -643,6 +691,7 @@ fn start_server(state: &AppState, port: u16) -> Result<(), String> {
     stop_server(&state.server);
     match start_http_listener(
         port,
+        Arc::clone(&state.last_request),
         Arc::clone(&state.logs),
         Arc::clone(&state.selected_printer),
         Arc::clone(&state.cache),
@@ -715,6 +764,9 @@ fn get_app_status(state: State<AppState>) -> AppStatus {
         firewall_ok: cache.firewall_ok && cache.firewall_port == port,
         sumatra_path: cache.sumatra_path,
         server_error: state.server_error.lock().unwrap().clone(),
+        keep_funnel: state.keep_funnel.load(Ordering::SeqCst),
+        last_request: state.last_request.lock().unwrap().clone(),
+        peers: cache.peers,
     }
 }
 
@@ -770,6 +822,49 @@ fn allow_firewall(state: State<AppState>) -> Result<AppStatus, String> {
     }
 }
 
+fn persist_config(state: &AppState) {
+    save_config(&AppConfig {
+        port: state.port.load(Ordering::SeqCst),
+        selected_printer: state.selected_printer.lock().unwrap().clone(),
+        auto_start_startup: state.auto_start_startup.load(Ordering::SeqCst),
+        keep_funnel: state.keep_funnel.load(Ordering::SeqCst),
+    });
+}
+
+#[tauri::command]
+fn set_keep_funnel(enable: bool, state: State<AppState>) -> AppStatus {
+    state.keep_funnel.store(enable, Ordering::SeqCst);
+    persist_config(&state);
+    get_app_status(state)
+}
+
+/// Cek ringan (`tailscale serve status --json`) lalu aktifkan ulang Funnel bila hilang.
+/// Dipanggil watcher latar tiap 90 detik HANYA bila pengguna mengaktifkan "Pulihkan Funnel otomatis".
+fn ensure_funnel(port: u16, cache: &Arc<Mutex<CachedData>>) {
+    for p in TAILSCALE_PATHS {
+        let Ok((ok, out)) = run_with_timeout(p, &["serve", "status", "--json"], 15) else { continue };
+        if !ok {
+            return;
+        }
+        let active_port = serde_json::from_str::<serde_json::Value>(&out)
+            .ok()
+            .map(|v| parse_funnel_status(&v));
+        let needs = match active_port {
+            Some((Some(_), Some(target))) => target != port,
+            Some((Some(_), None)) => false,
+            _ => true,
+        };
+        if needs {
+            let _ = run_with_timeout(p, &["funnel", "--bg", &port.to_string()], 25);
+            let fresh = query_system_info_silent(port);
+            if let Ok(mut c) = cache.lock() {
+                *c = fresh;
+            }
+        }
+        return;
+    }
+}
+
 /// Menjalankan `tailscale funnel --bg <port>` lalu memperbarui status Funnel.
 #[tauri::command]
 fn enable_funnel(state: State<AppState>) -> Result<AppStatus, String> {
@@ -783,6 +878,9 @@ fn enable_funnel(state: State<AppState>) -> Result<AppStatus, String> {
                 let active = new_cache.tailscale_funnel_domain.is_some();
                 *state.cache.lock().unwrap() = new_cache;
                 if active {
+                    // Pengguna sengaja mengaktifkan Funnel: pulihkan otomatis bila nanti hilang
+                    state.keep_funnel.store(true, Ordering::SeqCst);
+                    persist_config(&state);
                     return Ok(get_app_status(state));
                 }
                 last_err = "Perintah selesai tetapi Funnel belum aktif. Pastikan Funnel diizinkan di admin console Tailscale.".to_string();
@@ -813,6 +911,7 @@ fn save_printer_default(printer_name: String, state: State<AppState>) -> Result<
         port: state.port.load(Ordering::SeqCst),
         selected_printer: printer_name.clone(),
         auto_start_startup: state.auto_start_startup.load(Ordering::SeqCst),
+        keep_funnel: state.keep_funnel.load(Ordering::SeqCst),
     };
     save_config(&cfg);
 
@@ -835,6 +934,7 @@ fn update_settings(
         port: new_port,
         selected_printer: new_printer,
         auto_start_startup: auto_start,
+        keep_funnel: state.keep_funnel.load(Ordering::SeqCst),
     };
     save_config(&cfg);
     configure_startup_shortcut(auto_start);
@@ -955,6 +1055,10 @@ pub fn run() {
         }
     }
 
+    // Funnel sudah aktif saat aplikasi dibuka = pilihan pengguna; jaga tetap aktif
+    let keep_funnel = Arc::new(AtomicBool::new(
+        saved_cfg.keep_funnel || initial_cache.tailscale_funnel_domain.is_some(),
+    ));
     let cache = Arc::new(Mutex::new(initial_cache));
 
     let app_state = AppState {
@@ -967,7 +1071,24 @@ pub fn run() {
         server: Arc::new(Mutex::new(None)),
         server_error: Arc::new(Mutex::new(None)),
         app_handle: Arc::clone(&app_handle_holder),
+        keep_funnel: Arc::clone(&keep_funnel),
+        last_request: Arc::new(Mutex::new(None)),
     };
+    persist_config(&app_state);
+
+    // Watcher Funnel (ringan, 1 proses tiap 90 detik, hanya bila diaktifkan pengguna)
+    {
+        let keep = Arc::clone(&app_state.keep_funnel);
+        let running = Arc::clone(&app_state.is_running);
+        let port_ref = Arc::clone(&app_state.port);
+        let cache_ref = Arc::clone(&app_state.cache);
+        thread::spawn(move || loop {
+            thread::sleep(std::time::Duration::from_secs(90));
+            if keep.load(Ordering::SeqCst) && running.load(Ordering::SeqCst) {
+                ensure_funnel(port_ref.load(Ordering::SeqCst), &cache_ref);
+            }
+        });
+    }
     if let Err(e) = start_server(&app_state, saved_cfg.port) {
         eprintln!("Warning: could not auto start server: {}", e);
     }
@@ -1049,7 +1170,8 @@ pub fn run() {
             clear_logs,
             open_tailscale,
             allow_firewall,
-            enable_funnel
+            enable_funnel,
+            set_keep_funnel
         ])
         .run(tauri::generate_context!())
         .expect("error while running SIAP Print Tailscale");

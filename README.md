@@ -2,7 +2,7 @@
 
 **SIAP Print Tailscale** adalah aplikasi desktop Windows ringan berbasis **Tauri v2 (Rust + Vanilla JS)**. Aplikasi ini menjadi jembatan cetak dokumen resmi (PIB, Dokap, dan Berita Acara Pemeriksaan / BAP) dari aplikasi **SIAP NEO** (KPU Bea Cukai Tanjung Priok) ke printer kantor (mis. Kyocera TASKalfa). Jalur yang didukung: **Tailscale Funnel**, **IP Tailscale**, atau **Wi-Fi kantor**.
 
-Versi saat ini: **1.2.0**
+Versi saat ini: **1.3.0**
 
 ---
 
@@ -15,6 +15,8 @@ Versi saat ini: **1.2.0**
 - 🖨️ **Printer fisik saja**: printer virtual PDF/XPS/OneNote/Fax disaring. Printer default disimpan permanen.
 - 📄 **Cetak senyap via SumatraPDF**, dengan fallback Windows Shell. Muncul peringatan bila SumatraPDF tidak ditemukan.
 - 📋 **Riwayat cetak real-time** untuk setiap dokumen dari SIAP NEO.
+- 🔁 **Pulihkan Funnel otomatis** (opsional): bila Funnel hilang (mis. setelah `tailscale reset`), diaktifkan ulang tiap 90 detik.
+- 🟢 **Perangkat tailnet & permintaan terakhir**: daftar HP online/offline di Tailscale dan permintaan terakhir yang diterima server, untuk diagnosis koneksi dari HP.
 - 🧩 **System tray** dan mulai otomatis saat Windows menyala (`--hidden`).
 
 ---
@@ -37,7 +39,7 @@ Pilih mode **Otomatis** agar SIAP NEO mencoba Funnel → IP Tailscale → IP LAN
 ## File Eksekusi
 
 - `SIAP-Print-Tailscale.exe` (root repositori): versi terbaru, ditandatangani.
-- Berkas berversi (`SIAP-Print-Tailscale-v1.2.0-windows-x64.exe`) tersedia di halaman GitHub Releases.
+- Berkas berversi (`SIAP-Print-Tailscale-v1.3.0-windows-x64.exe`) tersedia di halaman GitHub Releases.
 
 ---
 
@@ -50,7 +52,7 @@ Server mendengarkan di `0.0.0.0:<port>` (default `1234`). Query string dan garis
    ```json
    {
      "status": "online",
-     "version": "1.2.0",
+     "version": "1.3.0",
      "port": 1234,
      "tailscaleIp": "100.113.7.91",
      "tailscaleFunnelDomain": "pc.tailnet.ts.net",
