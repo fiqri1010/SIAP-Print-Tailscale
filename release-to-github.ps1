@@ -35,7 +35,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # 3. Buat Catatan Rilis Dinamis & Unik
-$tag = "v1.4.0"
+$tag = "v1.4.1"
 $dateStr = Get-Date -Format "dd MMMM yyyy, HH:mm:ss"
 $gitHash = (git rev-parse --short HEAD)
 
@@ -73,7 +73,7 @@ $releaseNotes | Out-File -FilePath $notesFile -Encoding utf8
 
 # 4. Buat Rilis di GitHub beserta File Executable
 Write-Host "[3/4] Menerbitkan Rilis $tag ke GitHub Releases..." -ForegroundColor Yellow
-$releaseExe = Join-Path $repoDir "SIAP-Print-Tailscale-v1.4.0-windows-x64.exe"
+$releaseExe = Join-Path $repoDir "SIAP-Print-Tailscale-v1.4.1-windows-x64.exe"
 
 & $ghExe release create $tag $releaseExe `
     --repo "fiqri1010/SIAP-Print-Tailscale" `

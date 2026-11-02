@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
@@ -15,6 +16,107 @@ use tauri::{Emitter, Manager, State};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn CreateMutexW(
+        lp_mutex_attributes: *mut std::ffi::c_void,
+        b_initial_owner: i32,
+        lp_name: *const u16,
+    ) -> *mut std::ffi::c_void;
+    fn GetLastError() -> u32;
+    fn CloseHandle(h_object: *mut std::ffi::c_void) -> i32;
+}
+
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn MessageBoxW(
+        hwnd: *mut std::ffi::c_void,
+        lp_text: *const u16,
+        lp_caption: *const u16,
+        u_type: u32,
+    ) -> i32;
+    fn FindWindowW(
+        lp_class_name: *const u16,
+        lp_window_name: *const u16,
+    ) -> *mut std::ffi::c_void;
+    fn ShowWindow(hwnd: *mut std::ffi::c_void, n_cmd_show: i32) -> i32;
+    fn SetForegroundWindow(hwnd: *mut std::ffi::c_void) -> i32;
+}
+
+const ERROR_ALREADY_EXISTS: u32 = 183;
+const MB_OK: u32 = 0x00000000;
+const MB_ICONWARNING: u32 = 0x00000030;
+const MB_TOPMOST: u32 = 0x00040000;
+const MB_SETFOREGROUND: u32 = 0x00010000;
+
+fn to_wide(s: &str) -> Vec<u16> {
+    std::ffi::OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+}
+
+pub struct SingleInstanceGuard {
+    handle: *mut std::ffi::c_void,
+}
+
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe {
+                CloseHandle(self.handle);
+            }
+        }
+    }
+}
+
+fn notify_existing_instance_to_show(port: u16) {
+    use std::io::Write;
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    if let Ok(mut stream) = TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        Duration::from_millis(500),
+    ) {
+        let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+        let req = format!("GET /show HTTP/1.0\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n", port);
+        let _ = stream.write_all(req.as_bytes());
+    }
+}
+
+pub fn check_single_instance(port: u16) -> Option<SingleInstanceGuard> {
+    let mutex_name = to_wide("Local\\SIAP_Print_Tailscale_SingleInstance_Mutex");
+    unsafe {
+        let handle = CreateMutexW(std::ptr::null_mut(), 0, mutex_name.as_ptr());
+        if !handle.is_null() && GetLastError() == ERROR_ALREADY_EXISTS {
+            CloseHandle(handle);
+
+            // 1. Beritahu instance pertama yang sedang berjalan untuk membuka dan memfokuskan jendela
+            notify_existing_instance_to_show(port);
+
+            // 2. Fallback pencarian jendela Win32
+            let window_title = to_wide("SIAP Print Tailscale - KPU Bea Cukai Tanjung Priok");
+            let hwnd = FindWindowW(std::ptr::null_mut(), window_title.as_ptr());
+            if !hwnd.is_null() {
+                ShowWindow(hwnd, 9); // SW_RESTORE
+                SetForegroundWindow(hwnd);
+            }
+
+            // 3. Tampilkan pesan peringatan resmi sesuai permintaan
+            let msg = to_wide("Aplikasi telah terbuka, tidak bisa buka 2 jendela sekaligus");
+            let title = to_wide("SIAP Print Tailscale");
+            MessageBoxW(
+                std::ptr::null_mut(),
+                msg.as_ptr(),
+                title.as_ptr(),
+                MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND,
+            );
+
+            return None;
+        }
+
+        Some(SingleInstanceGuard { handle })
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PrinterInfo {
@@ -695,6 +797,23 @@ fn handle_request(mut request: tiny_http::Request, ctx: &HandlerCtx) {
         return;
     }
 
+    if url == "/show" && (method == Method::Get || method == Method::Post) {
+        if let Ok(handle_guard) = app_handle.lock() {
+            if let Some(h) = handle_guard.as_ref() {
+                if let Some(window) = h.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
+        }
+        let mut resp = Response::from_string("OK");
+        resp.add_header(cors_origin);
+        resp.add_header(cors_pna);
+        let _ = request.respond(resp);
+        return;
+    }
+
     if url == "/info" && method == Method::Get {
         let c = cache.lock().unwrap().clone();
         let curr_printer = selected_printer.lock().unwrap().clone();
@@ -1306,6 +1425,14 @@ fn open_tailscale() -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let saved_cfg = load_config();
+
+    // Pastikan hanya 1 aplikasi yang terbuka di sistem.
+    // Jika instance kedua dijalankan, tampilkan peringatan dan aktifkan jendela pertama.
+    let _single_instance_guard = match check_single_instance(saved_cfg.port) {
+        Some(guard) => guard,
+        None => return,
+    };
+
     let is_running = Arc::new(AtomicBool::new(false));
     let port = Arc::new(AtomicU16::new(saved_cfg.port));
     let selected_printer = Arc::new(Mutex::new(bare_printer_name(&saved_cfg.selected_printer)));
