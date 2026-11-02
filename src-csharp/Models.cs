@@ -77,6 +77,33 @@ public class PrintRequestDto
 
     [JsonPropertyName("pdfBase64")]
     public string? PdfBase64 { get; set; }
+
+    /// <summary>Ukuran kertas: "A4", "F4", atau kosong = kertas bawaan printer. (v2.1)</summary>
+    [JsonPropertyName("paperSize")]
+    public string? PaperSize { get; set; }
+
+    /// <summary>Margin dalam milimeter; null = margin bawaan driver. (v2.1)</summary>
+    [JsonPropertyName("marginsMm")]
+    public MarginsMmDto? MarginsMm { get; set; }
+
+    /// <summary>Halaman yang dicetak, 1-based, mis. "1-3,5"; kosong = semua. (v2.1)</summary>
+    [JsonPropertyName("pages")]
+    public string? Pages { get; set; }
+}
+
+public class MarginsMmDto
+{
+    [JsonPropertyName("top")]
+    public double Top { get; set; }
+
+    [JsonPropertyName("right")]
+    public double Right { get; set; }
+
+    [JsonPropertyName("bottom")]
+    public double Bottom { get; set; }
+
+    [JsonPropertyName("left")]
+    public double Left { get; set; }
 }
 
 public class PrintResponseDto
@@ -122,4 +149,12 @@ public class ServerInfoResponseDto
 
     [JsonPropertyName("uptimeSeconds")]
     public long UptimeSeconds { get; set; }
+
+    /// <summary>Versi SIAP Print, dipakai SIAP NEO untuk mengetahui fitur yang didukung.</summary>
+    [JsonPropertyName("version")]
+    public string Version { get; set; } = "";
+
+    /// <summary>Fitur cetak yang didukung: "paperSize", "margins", "pages".</summary>
+    [JsonPropertyName("features")]
+    public string[] Features { get; set; } = Array.Empty<string>();
 }

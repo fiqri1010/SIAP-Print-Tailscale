@@ -107,7 +107,9 @@ public class HttpPrintServer
                     LocalIp = TailscaleHelper.GetLocalIp(),
                     Hostname = Environment.MachineName,
                     SelectedPrinter = cfg.SelectedPrinter,
-                    UptimeSeconds = _uptime.ElapsedMilliseconds / 1000
+                    UptimeSeconds = _uptime.ElapsedMilliseconds / 1000,
+                    Version = typeof(HttpPrintServer).Assembly.GetName().Version?.ToString(3) ?? "",
+                    Features = new[] { "paperSize", "margins", "pages" }
                 };
 
                 return Results.Json(info);
@@ -162,10 +164,12 @@ public class HttpPrintServer
                     }
 
                     string docTitle = req.Filename ?? "SIAP_Document.pdf";
+                    var options = new PrintOptions(req.PaperSize, req.MarginsMm, req.Pages);
                     var (success, message, pages, finalPrinter) = await NativePdfPrinter.PrintAsync(
                         pdfBytes,
                         req.PrinterName,
-                        docTitle
+                        docTitle,
+                        options
                     );
 
                     // Simpan ke riwayat log

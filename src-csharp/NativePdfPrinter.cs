@@ -17,8 +17,69 @@ namespace SiapPrintServer;
 /// kemudian mengirimkannya melalui Windows Print Spooler (GDI+ PrintDocument) ke driver printer resmi.
 /// Mencegah kerusakan PDF dan menjamin jumlah halaman tercetak persis sesuai dokumen asli.
 /// </summary>
+/// <summary>Pilihan cetak dari SIAP NEO (v2.1). Semua opsional; null = perilaku lama.</summary>
+public record PrintOptions(string? PaperSize, MarginsMmDto? MarginsMm, string? Pages)
+{
+    public static readonly PrintOptions Default = new(null, null, null);
+}
+
 public static class NativePdfPrinter
 {
+    /// <summary>
+    /// "1-3,5" -> [0,1,2,4] (0-based, urut, unik, dalam batas). Kosong / tidak valid seluruhnya = semua halaman.
+    /// </summary>
+    public static List<int> ParsePageRange(string? spec, int totalPages)
+    {
+        var result = new SortedSet<int>();
+        if (!string.IsNullOrWhiteSpace(spec))
+        {
+            foreach (var raw in spec.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var parts = raw.Split('-', StringSplitOptions.TrimEntries);
+                if (parts.Length == 1 && int.TryParse(parts[0], out int single))
+                {
+                    if (single >= 1 && single <= totalPages) result.Add(single - 1);
+                }
+                else if (parts.Length == 2 && int.TryParse(parts[0], out int a) && int.TryParse(parts[1], out int b))
+                {
+                    if (a > b) (a, b) = (b, a);
+                    for (int p = Math.Max(1, a); p <= Math.Min(totalPages, b); p++) result.Add(p - 1);
+                }
+            }
+        }
+        if (result.Count == 0)
+        {
+            for (int i = 0; i < totalPages; i++) result.Add(i);
+        }
+        return result.ToList();
+    }
+
+    /// <summary>
+    /// Ukuran kertas yang diminta dari daftar kertas printer. F4 (Folio) = 215 x 330 mm (8,5 x 13 inci).
+    /// Bila driver tidak punya F4, dibuat ukuran kustom; null = pakai kertas bawaan printer.
+    /// </summary>
+    private static PaperSize? FindPaper(PrinterSettings ps, string? requested)
+    {
+        if (string.IsNullOrWhiteSpace(requested)) return null;
+        string want = requested.Trim().ToUpperInvariant();
+        // satuan PaperSize: seperseratus inci
+        (int w, int h) target = want == "F4" ? (850, 1300) : want == "A4" ? (827, 1169) : (0, 0);
+        if (target.w == 0) return null;
+        foreach (PaperSize p in ps.PaperSizes)
+        {
+            string name = (p.PaperName ?? "").ToUpperInvariant();
+            if (want == "A4" && (p.Kind == PaperKind.A4 || name.Contains("A4"))) return p;
+            if (want == "F4" && (name.Contains("F4") || name.Contains("FOLIO"))) return p;
+        }
+        foreach (PaperSize p in ps.PaperSizes)
+        {
+            if (Math.Abs(p.Width - target.w) <= 6 && Math.Abs(p.Height - target.h) <= 6) return p;
+        }
+        return new PaperSize(want == "F4" ? "F4 (215 x 330 mm)" : "A4", target.w, target.h);
+    }
+
+    private static int MmToHundredthsInch(double mm) => (int)Math.Round(Math.Clamp(mm, 0, 60) / 25.4 * 100);
+
     private static readonly SemaphoreSlim PrintLock = new(1, 1);
 
     private static readonly string TempDir = Path.Combine(
@@ -42,8 +103,10 @@ public static class NativePdfPrinter
     public static async Task<(bool Success, string Message, int PagesPrinted, string FinalPrinter)> PrintAsync(
         byte[] pdfBytes,
         string? requestedPrinter,
-        string docTitle)
+        string docTitle,
+        PrintOptions? options = null)
     {
+        options ??= PrintOptions.Default;
         if (pdfBytes == null || pdfBytes.Length == 0)
         {
             return (false, "Data berkas PDF kosong (0 byte)", 0, "");
@@ -88,6 +151,23 @@ public static class NativePdfPrinter
             // Gunakan StandardPrintController agar cetak berjalan 100% silent tanpa pop-up dialog
             printDoc.PrintController = new StandardPrintController();
 
+            // v2.1: ukuran kertas & margin dari SIAP NEO
+            var paper = FindPaper(printDoc.PrinterSettings, options.PaperSize);
+            if (paper != null)
+            {
+                printDoc.DefaultPageSettings.PaperSize = paper;
+            }
+            if (options.MarginsMm != null)
+            {
+                var m = options.MarginsMm;
+                printDoc.DefaultPageSettings.Margins = new Margins(
+                    MmToHundredthsInch(m.Left), MmToHundredthsInch(m.Right),
+                    MmToHundredthsInch(m.Top), MmToHundredthsInch(m.Bottom));
+            }
+
+            // v2.1: hanya halaman terpilih
+            var pageList = ParsePageRange(options.Pages, totalPages);
+            int listPos = 0;
             int currentPageIndex = 0;
             Exception? pageException = null;
 
@@ -95,11 +175,12 @@ public static class NativePdfPrinter
             {
                 try
                 {
-                    if (currentPageIndex >= totalPages)
+                    if (listPos >= pageList.Count)
                     {
                         e.HasMorePages = false;
                         return;
                     }
+                    currentPageIndex = pageList[listPos];
 
                     using var pdfPage = pdfDoc.GetPage((uint)currentPageIndex);
 
@@ -145,8 +226,8 @@ public static class NativePdfPrinter
                         e.Graphics.DrawImage(pageBmp, new Rectangle(destX, destY, destWidth, destHeight));
                     }
 
-                    currentPageIndex++;
-                    e.HasMorePages = (currentPageIndex < totalPages);
+                    listPos++;
+                    e.HasMorePages = (listPos < pageList.Count);
                 }
                 catch (Exception ex)
                 {
@@ -159,10 +240,11 @@ public static class NativePdfPrinter
 
             if (pageException != null)
             {
-                return (false, $"Kesalahan saat mencetak: {pageException.Message}", currentPageIndex, finalPrinter);
+                return (false, $"Kesalahan saat mencetak: {pageException.Message}", listPos, finalPrinter);
             }
 
-            return (true, $"Dicetak via Native Windows PDF Engine ({totalPages} halaman)", totalPages, finalPrinter);
+            string paperInfo = paper != null ? $", kertas {paper.PaperName}" : "";
+            return (true, $"Dicetak via Native Windows PDF Engine ({pageList.Count} dari {totalPages} halaman{paperInfo})", pageList.Count, finalPrinter);
         }
         catch (Exception ex)
         {
