@@ -2,7 +2,7 @@
 
 **SIAP Print Tailscale** adalah aplikasi desktop Windows mandiri berbasis **C# dan .NET 8 Native** dengan antarmuka ringkas. Aplikasi ini menjadi jembatan cetak dokumen resmi (PIB, Dokap, dan Berita Acara Pemeriksaan / BAP) dari aplikasi **SIAP NEO** (KPU Bea Cukai Tanjung Priok) ke printer kantor (mis. Kyocera TASKalfa MZ3200i). Jalur koneksi yang didukung: **Tailscale Funnel**, **IP Tailscale**, atau **Wi-Fi kantor (LAN)**.
 
-Versi saat ini: **v2.0.0 (Native C# / .NET 8)**
+Versi saat ini: **v2.1.0 (Native C# / .NET 8)**
 
 ---
 
@@ -13,6 +13,7 @@ Versi saat ini: **v2.0.0 (Native C# / .NET 8)**
   - **Akurasi Halaman 100%**: Dokumen 1 lembar dicetak tepat 1 lembar (mencegah pencetakan kertas berlebih).
   - **Bebas Kerusakan PDF**: Format vektor, barcode, dan font formulir kepabeanan tetap tajam tanpa distorsi.
   - **100% Silent**: Tidak membuka jendela PDF viewer atau pop-up eksternal apa pun saat mencetak.
+- 📄 **Pengaturan cetak dari SIAP NEO** (v2.1): ukuran kertas A4/F4, margin (mm), dan rentang halaman dipilih di HP lalu diterapkan ke printer.
 - 🚀 **Tailscale Funnel (HTTPS publik)**: Mendeteksi domain Funnel aktif secara dinamis (`https://<nama-pc>.<tailnet>.ts.net`).
 - 🔒 **IP Tailscale** dan 🌐 **IP LAN**: Dilengkapi tombol salin cepat untuk mempermudah konfigurasi di SIAP NEO.
 - 🛡️ **Windows Firewall Integration**: Pemeriksaan port aktif dan pembuatan aturan firewall otomatis dengan satu klik.
