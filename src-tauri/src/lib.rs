@@ -34,11 +34,19 @@ pub struct PrintLogItem {
     pub message: String,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub port: u16,
     pub selected_printer: String,
     pub auto_start_startup: bool,
+    #[serde(default)]
+    pub start_before_login: bool,
+    #[serde(default = "default_true")]
+    pub minimize_to_tray_on_startup: bool,
     /// Aktifkan ulang Funnel otomatis bila hilang (mis. setelah `tailscale reset`). Diatur pengguna.
     #[serde(default)]
     pub keep_funnel: bool,
@@ -84,6 +92,8 @@ pub struct AppStatus {
     pub hostname: String,
     pub selected_printer: String,
     pub auto_start_startup: bool,
+    pub start_before_login: bool,
+    pub minimize_to_tray_on_startup: bool,
     pub printers: Vec<PrinterInfo>,
     pub logs: Vec<PrintLogItem>,
     pub firewall_ok: bool,
@@ -106,6 +116,8 @@ pub struct AppState {
     pub port: Arc<AtomicU16>,
     pub selected_printer: Arc<Mutex<String>>,
     pub auto_start_startup: Arc<AtomicBool>,
+    pub start_before_login: Arc<AtomicBool>,
+    pub minimize_to_tray_on_startup: Arc<AtomicBool>,
     pub logs: Arc<Mutex<Vec<PrintLogItem>>>,
     pub cache: Arc<Mutex<CachedData>>,
     pub server: Arc<Mutex<Option<RunningServer>>>,
@@ -144,6 +156,14 @@ fn find_sumatra() -> Option<String> {
     }
     candidates.push("C:\\Program Files\\SumatraPDF\\SumatraPDF.exe".to_string());
     candidates.push("C:\\Program Files (x86)\\SumatraPDF\\SumatraPDF.exe".to_string());
+    if let Ok(entries) = fs::read_dir("C:\\Users") {
+        for entry in entries.flatten() {
+            let path = entry.path().join("AppData\\Local\\SumatraPDF\\SumatraPDF.exe");
+            if path.exists() {
+                candidates.push(path.to_string_lossy().to_string());
+            }
+        }
+    }
     candidates.into_iter().find(|p| std::path::Path::new(p).exists())
 }
 
@@ -196,17 +216,68 @@ fn ps_encoded(script: &str) -> String {
     BASE64_STANDARD.encode(bytes)
 }
 
+const BOOT_TASK_NAME: &str = "SIAP-Print-Tailscale-Boot";
+
+fn is_boot_task_installed() -> bool {
+    let output = Command::new("schtasks")
+        .args(["/Query", "/TN", BOOT_TASK_NAME])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+    match output {
+        Ok(out) => out.status.success(),
+        Err(_) => false,
+    }
+}
+
 fn get_config_path() -> PathBuf {
+    if let Ok(program_data) = std::env::var("ProgramData") {
+        let dir = PathBuf::from(program_data).join("SIAP-Print-Tailscale");
+        if fs::create_dir_all(&dir).is_ok() {
+            let p = dir.join("config.json");
+            if !p.exists() {
+                if let Ok(app_data) = std::env::var("APPDATA") {
+                    let old_p = PathBuf::from(app_data).join("SIAP-Print-Tailscale").join("config.json");
+                    if old_p.exists() {
+                        let _ = fs::copy(&old_p, &p);
+                    }
+                }
+            }
+            return p;
+        }
+    }
     let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
     let dir = PathBuf::from(app_data).join("SIAP-Print-Tailscale");
     let _ = fs::create_dir_all(&dir);
     dir.join("config.json")
 }
 
+fn get_logs_path() -> PathBuf {
+    get_config_path().parent().unwrap().join("logs.json")
+}
+
+fn load_logs() -> Vec<PrintLogItem> {
+    let path = get_logs_path();
+    if let Ok(data) = fs::read_to_string(path) {
+        if let Ok(list) = serde_json::from_str(&data) {
+            return list;
+        }
+    }
+    Vec::new()
+}
+
+fn save_logs(list: &[PrintLogItem]) {
+    let path = get_logs_path();
+    let _ = fs::write(path, serde_json::to_string(list).unwrap_or_default());
+}
+
 fn load_config() -> AppConfig {
     let path = get_config_path();
     if let Ok(data) = fs::read_to_string(path) {
-        if let Ok(cfg) = serde_json::from_str(&data) {
+        if let Ok(mut cfg) = serde_json::from_str::<AppConfig>(&data) {
+            if is_boot_task_installed() {
+                cfg.start_before_login = true;
+                cfg.auto_start_startup = true;
+            }
             return cfg;
         }
     }
@@ -214,6 +285,8 @@ fn load_config() -> AppConfig {
         port: 1234,
         selected_printer: String::new(),
         auto_start_startup: false,
+        start_before_login: false,
+        minimize_to_tray_on_startup: true,
         keep_funnel: false,
     }
 }
@@ -432,31 +505,103 @@ fn print_pdf_to_windows(file_path: &str, target_printer: &str) -> Result<String,
     }
 }
 
-fn configure_startup_shortcut(enable: bool) {
+fn configure_user_startup_shortcut(enable: bool, minimize_to_tray: bool) {
     let script = if enable {
-        r#"
+        let args = if minimize_to_tray { "--hidden" } else { "" };
+        format!(
+            r#"
             $exePath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
             $startup = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
             $shortcutPath = Join-Path $startup "SIAP-Print-Tailscale.lnk"
             $wsh = New-Object -ComObject WScript.Shell
             $sc = $wsh.CreateShortcut($shortcutPath)
             $sc.TargetPath = $exePath
-            $sc.Arguments = "--hidden"
+            $sc.Arguments = "{args}"
             $sc.WorkingDirectory = Split-Path $exePath
-            $sc.Description = "SIAP Print Tailscale Background Service"
+            $sc.Description = "SIAP Print Tailscale Service"
             $sc.Save()
-        "#
+            "#
+        )
     } else {
         r#"
             $startup = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
             $shortcutPath = Join-Path $startup "SIAP-Print-Tailscale.lnk"
             if (Test-Path $shortcutPath) { Remove-Item $shortcutPath -Force }
-        "#
+        "#.to_string()
     };
     let _ = Command::new("powershell")
-        .args(["-NoProfile", "-Command", script])
+        .args(["-NoProfile", "-Command", &script])
         .creation_flags(CREATE_NO_WINDOW)
         .output();
+}
+
+fn configure_boot_task(enable: bool) -> Result<(), String> {
+    let task_installed = is_boot_task_installed();
+    if enable {
+        if task_installed {
+            return Ok(());
+        }
+        let current_exe = std::env::current_exe()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "C:\\Repo\\SIAP-Print-Tailscale\\SIAP-Print-Tailscale.exe".to_string());
+
+        let inner = format!(
+            r#"$action = New-ScheduledTaskAction -Execute '{exe}' -Argument '--hidden'; $trigger = New-ScheduledTaskTrigger -AtStartup; $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest; $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 0); Register-ScheduledTask -TaskName '{name}' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force"#,
+            exe = current_exe.replace('\'', "''"),
+            name = BOOT_TASK_NAME
+        );
+        let outer = format!(
+            "Start-Process -FilePath powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-EncodedCommand','{}'",
+            ps_encoded(&inner)
+        );
+        let res = run_with_timeout("powershell", &["-NoProfile", "-Command", &outer], 60);
+        if is_boot_task_installed() {
+            Ok(())
+        } else {
+            match res {
+                Ok((_, out)) if !out.is_empty() => Err(format!("Gagal membuat Boot Task: {}", out)),
+                Err(e) => Err(format!("Gagal membuat Boot Task: {}", e)),
+                _ => Err("Gagal membuat Scheduled Task Boot (izin Administrator ditolak?)".to_string()),
+            }
+        }
+    } else {
+        if !task_installed {
+            return Ok(());
+        }
+        let inner = format!("Unregister-ScheduledTask -TaskName '{}' -Confirm:$false -ErrorAction SilentlyContinue", BOOT_TASK_NAME);
+        let outer = format!(
+            "Start-Process -FilePath powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-EncodedCommand','{}'",
+            ps_encoded(&inner)
+        );
+        let _ = run_with_timeout("powershell", &["-NoProfile", "-Command", &outer], 60);
+        if !is_boot_task_installed() {
+            Ok(())
+        } else {
+            Err("Gagal menghapus Scheduled Task Boot (izin Administrator ditolak?)".to_string())
+        }
+    }
+}
+
+fn check_existing_siap_server(port: u16) -> bool {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    if let Ok(mut stream) = TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        Duration::from_millis(600),
+    ) {
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(600)));
+        let req = format!("GET /ping HTTP/1.0\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n", port);
+        if stream.write_all(req.as_bytes()).is_ok() {
+            let mut buf = [0u8; 512];
+            if let Ok(n) = stream.read(&mut buf) {
+                let resp = String::from_utf8_lossy(&buf[..n]);
+                return resp.contains("SIAP Print Server is running");
+            }
+        }
+    }
+    false
 }
 
 fn start_http_listener(
@@ -616,6 +761,7 @@ fn start_http_listener(
                                         if log_lock.len() > 100 {
                                             log_lock.pop();
                                         }
+                                        save_logs(&log_lock);
                                     }
 
                                     // Emit event to frontend if app is available
@@ -704,9 +850,15 @@ fn start_server(state: &AppState, port: u16) -> Result<(), String> {
             Ok(())
         }
         Err(e) => {
-            state.is_running.store(false, Ordering::SeqCst);
-            *state.server_error.lock().unwrap() = Some(e.clone());
-            Err(e)
+            if check_existing_siap_server(port) {
+                state.is_running.store(true, Ordering::SeqCst);
+                *state.server_error.lock().unwrap() = None;
+                Ok(())
+            } else {
+                state.is_running.store(false, Ordering::SeqCst);
+                *state.server_error.lock().unwrap() = Some(e.clone());
+                Err(e)
+            }
         }
     }
 }
@@ -745,6 +897,8 @@ fn get_app_status(state: State<AppState>) -> AppStatus {
     let port = state.port.load(Ordering::SeqCst);
     let selected_printer = state.selected_printer.lock().unwrap().clone();
     let auto_start_startup = state.auto_start_startup.load(Ordering::SeqCst);
+    let start_before_login = state.start_before_login.load(Ordering::SeqCst);
+    let minimize_to_tray_on_startup = state.minimize_to_tray_on_startup.load(Ordering::SeqCst);
     let logs = state.logs.lock().unwrap().clone();
     let cache = state.cache.lock().unwrap().clone();
 
@@ -759,6 +913,8 @@ fn get_app_status(state: State<AppState>) -> AppStatus {
         hostname: cache.hostname,
         selected_printer,
         auto_start_startup,
+        start_before_login,
+        minimize_to_tray_on_startup,
         printers: cache.printers,
         logs,
         firewall_ok: cache.firewall_ok && cache.firewall_port == port,
@@ -827,6 +983,8 @@ fn persist_config(state: &AppState) {
         port: state.port.load(Ordering::SeqCst),
         selected_printer: state.selected_printer.lock().unwrap().clone(),
         auto_start_startup: state.auto_start_startup.load(Ordering::SeqCst),
+        start_before_login: state.start_before_login.load(Ordering::SeqCst),
+        minimize_to_tray_on_startup: state.minimize_to_tray_on_startup.load(Ordering::SeqCst),
         keep_funnel: state.keep_funnel.load(Ordering::SeqCst),
     });
 }
@@ -911,6 +1069,8 @@ fn save_printer_default(printer_name: String, state: State<AppState>) -> Result<
         port: state.port.load(Ordering::SeqCst),
         selected_printer: printer_name.clone(),
         auto_start_startup: state.auto_start_startup.load(Ordering::SeqCst),
+        start_before_login: state.start_before_login.load(Ordering::SeqCst),
+        minimize_to_tray_on_startup: state.minimize_to_tray_on_startup.load(Ordering::SeqCst),
         keep_funnel: state.keep_funnel.load(Ordering::SeqCst),
     };
     save_config(&cfg);
@@ -923,21 +1083,38 @@ fn update_settings(
     new_port: u16,
     new_printer: String,
     auto_start: bool,
+    start_before_login: bool,
+    minimize_to_tray: bool,
     state: State<AppState>,
 ) -> Result<AppStatus, String> {
     let old_port = state.port.load(Ordering::SeqCst);
     state.port.store(new_port, Ordering::SeqCst);
     *state.selected_printer.lock().unwrap() = new_printer.clone();
     state.auto_start_startup.store(auto_start, Ordering::SeqCst);
+    state.start_before_login.store(start_before_login, Ordering::SeqCst);
+    state.minimize_to_tray_on_startup.store(minimize_to_tray, Ordering::SeqCst);
 
     let cfg = AppConfig {
         port: new_port,
         selected_printer: new_printer,
         auto_start_startup: auto_start,
+        start_before_login,
+        minimize_to_tray_on_startup: minimize_to_tray,
         keep_funnel: state.keep_funnel.load(Ordering::SeqCst),
     };
     save_config(&cfg);
-    configure_startup_shortcut(auto_start);
+
+    if auto_start {
+        configure_user_startup_shortcut(true, minimize_to_tray);
+        if start_before_login {
+            configure_boot_task(true)?;
+        } else {
+            let _ = configure_boot_task(false);
+        }
+    } else {
+        configure_user_startup_shortcut(false, false);
+        let _ = configure_boot_task(false);
+    }
 
     if old_port != new_port {
         {
@@ -1011,6 +1188,7 @@ fn test_print(printer_name: String, state: State<AppState>) -> Result<String, St
 fn clear_logs(state: State<AppState>) -> Result<bool, String> {
     if let Ok(mut log_lock) = state.logs.lock() {
         log_lock.clear();
+        save_logs(&log_lock);
     }
     Ok(true)
 }
@@ -1041,7 +1219,9 @@ pub fn run() {
     let port = Arc::new(AtomicU16::new(saved_cfg.port));
     let selected_printer = Arc::new(Mutex::new(bare_printer_name(&saved_cfg.selected_printer)));
     let auto_start_startup = Arc::new(AtomicBool::new(saved_cfg.auto_start_startup));
-    let logs = Arc::new(Mutex::new(Vec::new()));
+    let start_before_login = Arc::new(AtomicBool::new(saved_cfg.start_before_login));
+    let minimize_to_tray_on_startup = Arc::new(AtomicBool::new(saved_cfg.minimize_to_tray_on_startup));
+    let logs = Arc::new(Mutex::new(load_logs()));
     let app_handle_holder = Arc::new(Mutex::new(None));
 
     // Read initial system info ONCE silently with CREATE_NO_WINDOW
@@ -1066,6 +1246,8 @@ pub fn run() {
         port,
         selected_printer,
         auto_start_startup,
+        start_before_login,
+        minimize_to_tray_on_startup,
         logs,
         cache,
         server: Arc::new(Mutex::new(None)),

@@ -15,7 +15,7 @@
           <img src="assets/printer.svg" alt="Printer" width="32" height="32" />
         </div>
         <div>
-          <h1 class="brand-title">SIAP Print Tailscale <span class="version-tag">v1.3</span></h1>
+          <h1 class="brand-title">SIAP Print Tailscale <span class="version-tag">v1.4</span></h1>
           <p class="brand-subtitle">KPU Bea Cukai Tanjung Priok • Jembatan Cetak Dokumen Resmi</p>
         </div>
       </div>
@@ -121,23 +121,58 @@
         <div class="card-header space-between">
           <div class="header-left">
             <span class="card-icon">⚙️</span>
-            <h3>Konfigurasi Port & Startup Windows</h3>
+            <div>
+              <h3>Konfigurasi Port & Startup Windows</h3>
+              <p class="card-hint">Atur port server, startup sistem (sebelum login), dan mode tampilan System Tray.</p>
+            </div>
           </div>
           <div class="header-right">
-            <button id="btn-save-settings" class="btn btn-small btn-primary">Terapkan Pengaturan</button>
+            <button id="btn-save-settings" class="btn btn-small btn-primary">💾 Terapkan Pengaturan</button>
           </div>
         </div>
-        <div class="card-body config-row">
-          <div class="config-item">
-            <label for="input-port" class="field-label">Port Server:</label>
-            <input type="number" id="input-port" min="1024" max="65535" value="1234" class="input-number" />
-          </div>
-          <div class="config-item checkbox-item">
-            <label class="checkbox-container">
-              <input type="checkbox" id="chk-auto-start" />
-              <span class="checkmark"></span>
-              <span class="checkbox-label">Jalankan otomatis saat Windows startup (Sembunyi di Background System Tray)</span>
-            </label>
+        <div class="card-body">
+          <div class="settings-grid">
+            <!-- Port Server -->
+            <div class="config-group">
+              <label for="input-port" class="field-label">Port Server HTTP:</label>
+              <div class="input-with-hint">
+                <input type="number" id="input-port" min="1024" max="65535" value="1234" class="input-number" />
+                <span class="field-note">Default: <strong>1234</strong></span>
+              </div>
+            </div>
+
+            <!-- Opsi 1: Open when Startup -->
+            <div class="config-group">
+              <label class="checkbox-container main-setting-toggle">
+                <input type="checkbox" id="chk-auto-start" />
+                <span class="checkmark"></span>
+                <span class="checkbox-label"><strong>Jalankan Otomatis saat Startup Windows (Open when Startup)</strong></span>
+              </label>
+
+              <!-- Sub-opsi: Mulai Sebelum Login (System Boot) -->
+              <div id="startup-sub-options" class="sub-options-box">
+                <label class="checkbox-container">
+                  <input type="checkbox" id="chk-start-before-login" />
+                  <span class="checkmark"></span>
+                  <span class="checkbox-label">
+                    <strong>Mulai sebelum login / layar kunci Windows (System Boot)</strong>
+                    <span class="sub-label-hint">⚡ <em>Rekomendasi Kantor:</em> Server langsung aktif saat PC dinyalakan, sehingga HP petugas di lapangan bisa langsung mencetak tanpa menunggu seseorang login ke Windows.</span>
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Opsi 2: Minimize to Tray when Startup -->
+            <div class="config-group">
+              <label class="checkbox-container main-setting-toggle">
+                <input type="checkbox" id="chk-minimize-to-tray" />
+                <span class="checkmark"></span>
+                <span class="checkbox-label">
+                  <strong>Minimize to Tray saat Startup</strong>
+                  <span class="sub-label-hint">Saat Windows menyala, aplikasi langsung bersembunyi di System Tray pojok kanan bawah tanpa memunculkan jendela di layar. (Bila dimatikan, jendela utama langsung terbuka).</span>
+                </span>
+              </label>
+            </div>
           </div>
         </div>
       </section>

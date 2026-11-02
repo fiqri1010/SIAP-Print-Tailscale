@@ -35,7 +35,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # 3. Buat Catatan Rilis Dinamis & Unik
-$tag = "v1.1.0"
+$tag = "v1.4.0"
 $dateStr = Get-Date -Format "dd MMMM yyyy, HH:mm:ss"
 $gitHash = (git rev-parse --short HEAD)
 
@@ -45,27 +45,24 @@ $releaseNotes = @"
 Dipublikasikan secara resmi pada: **$dateStr**
 Commit Ref: \`$gitHash\`
 
-### 🌟 Fitur Baru & Pembaruan
-1. **Deteksi Otomatis Alamat Tailscale Funnel (HTTPS)**
-   - Mendeteksi secara langsung domain publik \`https://fqrbc.taile81f15.ts.net\`
-   - Petugas dengan smartphone Android (SIAP NEO) **TIDAK PERLU** mengunduh atau mengaktifkan aplikasi Tailscale di HP.
-2. **System Tray & Berjalan di Background (Auto-Hide Startup)**
-   - Aplikasi dapat diminimalkan ke System Tray pojok kanan bawah.
-   - Menutup jendela (klik tombol X) tidak mematikan server, melainkan bersembunyi di System Tray.
-   - Mendukung opsi auto-start saat Windows menyala dengan argumen \`--hidden\`.
-3. **Penyaringan Printer Fisik Kantor**
-   - Printer virtual PDF (seperti Microsoft Print to PDF, OneNote, Fax, XPS) otomatis disaring.
-   - Hanya menampilkan printer fisik resmi (seperti **Kyocera TASKalfa MZ3200i KX**).
-4. **Penyimpanan Permanen Printer Default**
-   - Dilengkapi tombol \`Simpan Printer Default\` yang disimpan ke konfigurasi permanen (\`config.json\`).
-5. **Arsitektur In-Memory Cache & Silent Execution (Bebas Kedipan Window)**
-   - Menghilangkan bug CMD/PowerShell berulang-ulang yang mengganggu interaksi aplikasi.
-   - Status sistem, IP Tailscale, dan printer di-cache langsung di memori Rust backend (0ms latency response).
-   - Semua proses background menggunakan flag \`CREATE_NO_WINDOW (0x08000000)\` agar berjalan 100% senyap.
-6. **Ikon Vektor Resmi Printer**
-   - Menggunakan ikon vektor printer modern dengan indikator status jaringan.
-7. **Tanda Tangan Digital Authenticode**
-   - File eksekusi ditandatangani secara digital dengan stempel waktu resmi (DigiCert Timestamping).
+### 🌟 Fitur Baru & Pembaruan (v1.4.0)
+1. **Opsi Pengaturan 'Open when Startup' (Buka saat Startup Windows)**
+   - Tersedia opsi untuk mengaktifkan peluncuran otomatis saat Windows pertama kali menyala.
+2. **Mulai Sebelum Login Layar Kunci Windows (System Boot Service)**
+   - **Fitur Khusus Kantor:** Aplikasi dapat didaftarkan sebagai Windows Scheduled Task (`ONSTART` level SYSTEM).
+   - Server HTTP dan Tailscale Funnel langsung aktif saat PC dihidupkan, sehingga petugas Android (SIAP NEO) di lapangan dapat langsung mencetak dokumen kapan saja **tanpa perlu menunggu ada petugas yang membuka kunci/login ke Windows**.
+3. **Aturan 'Minimize to Tray when Startup'**
+   - Pengguna dapat memilih apakah aplikasi saat startup langsung bersembunyi di System Tray pojok kanan bawah (`--hidden`), atau langsung membuka jendela utama di layar desktop.
+4. **Shared Configuration & Persistent Logs di ProgramData**
+   - Konfigurasi printer default dan riwayat cetak disimpan terpusat di `%ProgramData%\SIAP-Print-Tailscale\`, sehingga dapat diakses bersama secara konsisten oleh layanan sistem boot maupun pengguna interaktif.
+5. **Multi-Instance & Boot Server Auto-Detection**
+   - Aplikasi desktop mendeteksi otomatis jika server cetak sudah berjalan di latar belakang sebagai layanan boot (`127.0.0.1:port/ping`), menampilkan status aktif tanpa konflik port.
+6. **Deteksi Otomatis Alamat Tailscale Funnel (HTTPS) & VPN Mesh**
+   - Mendeteksi domain publik `https://fqrbc.taile81f15.ts.net`, IP Tailscale, dan IP LAN lokal.
+7. **Penyaringan Printer Fisik Kantor**
+   - Printer virtual PDF otomatis disaring; mendeteksi dan siap mencetak ke **Kyocera TASKalfa MZ3200i KX**.
+8. **Tanda Tangan Digital Authenticode**
+   - Binary eksekusi ditandatangani secara digital dengan sertifikat resmi dan stempel waktu DigiCert.
 
 ---
 *KPU Bea Cukai Tanjung Priok • SIAP NEO Ecosystem*
@@ -76,9 +73,10 @@ $releaseNotes | Out-File -FilePath $notesFile -Encoding utf8
 
 # 4. Buat Rilis di GitHub beserta File Executable
 Write-Host "[3/4] Menerbitkan Rilis $tag ke GitHub Releases..." -ForegroundColor Yellow
-$releaseExe = Join-Path $repoDir "SIAP-Print-Tailscale-v1.1.0-windows-x64.exe"
+$releaseExe = Join-Path $repoDir "SIAP-Print-Tailscale-v1.4.0-windows-x64.exe"
 
 & $ghExe release create $tag $releaseExe `
+    --repo "fiqri1010/SIAP-Print-Tailscale" `
     --title "SIAP Print Tailscale $tag - Production Release" `
     --notes-file $notesFile
 

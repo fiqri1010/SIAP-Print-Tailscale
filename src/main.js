@@ -24,6 +24,9 @@ const btnCopyLan = document.getElementById('btn-copy-lan');
 
 const inputPort = document.getElementById('input-port');
 const chkAutoStart = document.getElementById('chk-auto-start');
+const chkStartBeforeLogin = document.getElementById('chk-start-before-login');
+const chkMinimizeToTray = document.getElementById('chk-minimize-to-tray');
+const startupSubOptions = document.getElementById('startup-sub-options');
 const btnSaveSettings = document.getElementById('btn-save-settings');
 
 const selectPrinter = document.getElementById('select-printer');
@@ -135,11 +138,17 @@ function renderStatus(status) {
   }
   sumatraBanner.classList.toggle('hidden', !!status.sumatra_path);
 
-  // Port & Startup checkbox
+  // Port & Startup checkboxes
   if (!isUserEditingPort) {
     inputPort.value = status.port;
   }
   chkAutoStart.checked = !!status.auto_start_startup;
+  chkStartBeforeLogin.checked = !!status.start_before_login;
+  chkStartBeforeLogin.disabled = !status.auto_start_startup;
+  if (startupSubOptions) {
+    startupSubOptions.classList.toggle('disabled', !status.auto_start_startup);
+  }
+  chkMinimizeToTray.checked = status.minimize_to_tray_on_startup !== false;
 
   // Printers dropdown (Virtual PDF filtered out)
   renderPrinters(status.printers, status.selected_printer);
@@ -318,25 +327,43 @@ inputPort.addEventListener('focus', () => {
   isUserEditingPort = true;
 });
 
+chkAutoStart.addEventListener('change', () => {
+  const enabled = chkAutoStart.checked;
+  chkStartBeforeLogin.disabled = !enabled;
+  if (startupSubOptions) {
+    startupSubOptions.classList.toggle('disabled', !enabled);
+  }
+});
+
 btnSaveSettings.addEventListener('click', async () => {
   const newPort = parseInt(inputPort.value, 10);
   if (isNaN(newPort) || newPort < 1024 || newPort > 65535) {
     showToast('Port harus berupa angka antara 1024 - 65535');
     return;
   }
+  btnSaveSettings.disabled = true;
+  btnSaveSettings.textContent = 'Menyimpan...';
   try {
     isUserEditingPort = false;
     const printerName = selectPrinter.value || '';
     const autoStart = chkAutoStart.checked;
+    const startBeforeLogin = chkStartBeforeLogin.checked;
+    const minimizeToTray = chkMinimizeToTray.checked;
+
     const updated = await invoke('update_settings', {
       newPort,
       newPrinter: printerName,
       autoStart,
+      startBeforeLogin,
+      minimizeToTray,
     });
     renderStatus(updated);
-    showToast('✅ Pengaturan Port & Startup berhasil disimpan!');
+    showToast('✅ Pengaturan Port & Startup Windows berhasil disimpan!');
   } catch (err) {
-    showToast('Gagal menyimpan pengaturan: ' + err);
+    showToast('⚠️ Gagal menyimpan pengaturan: ' + err, 7000);
+  } finally {
+    btnSaveSettings.disabled = false;
+    btnSaveSettings.textContent = '💾 Terapkan Pengaturan';
   }
 });
 

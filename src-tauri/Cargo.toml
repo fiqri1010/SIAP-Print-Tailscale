@@ -1,6 +1,6 @@
 [package]
 name = "siap-print-tailscale"
-version = "1.3.0"
+version = "1.4.0"
 description = "SIAP Print Tailscale Server for Bea Cukai Tanjung Priok"
 authors = ["SIAP NEO Team"]
 edition = "2024"
