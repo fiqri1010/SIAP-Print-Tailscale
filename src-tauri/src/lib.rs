@@ -619,208 +619,238 @@ fn start_http_listener(
     let stop = Arc::new(AtomicBool::new(false));
     let stop_flag = Arc::clone(&stop);
 
+    let ctx = HandlerCtx { port, last_request, logs, selected_printer, cache, app_handle };
     let handle = thread::spawn(move || {
         while !stop_flag.load(Ordering::SeqCst) {
-            if let Ok(Some(mut request)) = server.recv_timeout(std::time::Duration::from_millis(500)) {
-                // Abaikan query string & garis miring akhir: "/ping/", "/ping?x=1" tetap dikenali
-                let raw_url = request.url().to_string();
-                let path = raw_url.split('?').next().unwrap_or("/").trim_end_matches('/');
-                let url = if path.is_empty() { "/".to_string() } else { path.to_string() };
-                let method = request.method().clone();
-                if method != Method::Options {
-                    let from = match request.remote_addr() {
-                        Some(a) if a.ip().is_loopback() => "Funnel/PC ini".to_string(),
-                        Some(a) => a.ip().to_string(),
-                        None => "-".to_string(),
-                    };
-                    if let Ok(mut lr) = last_request.lock() {
-                        *lr = Some(format!("{} {} {} dari {}", current_time_str(), method, url, from));
-                    }
-                }
-                let json_ct = || Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
-
-                let cors_origin = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
-                let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Origin, Content-Type, Accept, Authorization"[..]).unwrap();
-                let cors_methods = Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap();
-                let cors_pna = Header::from_bytes(&b"Access-Control-Allow-Private-Network"[..], &b"true"[..]).unwrap();
-
-                if method == Method::Options {
-                    let mut resp = Response::empty(StatusCode(204));
-                    resp.add_header(cors_origin);
-                    resp.add_header(cors_headers);
-                    resp.add_header(cors_methods);
-                    resp.add_header(cors_pna);
-                    let _ = request.respond(resp);
-                    continue;
-                }
-
-                if url == "/ping" && method == Method::Get {
-                    let mut resp = Response::from_string("🖨️ SIAP Print Server is running");
-                    resp.add_header(cors_origin);
-                    resp.add_header(cors_pna);
-                    let _ = request.respond(resp);
-                    continue;
-                }
-
-                if url == "/info" && method == Method::Get {
-                    let c = cache.lock().unwrap().clone();
-                    let curr_printer = selected_printer.lock().unwrap().clone();
-                    let json = serde_json::json!({
-                        "status": "online",
-                        "version": env!("CARGO_PKG_VERSION"),
-                        "port": port,
-                        "tailscaleIp": c.tailscale_ip,
-                        "tailscaleFunnelDomain": c.tailscale_funnel_domain,
-                        "funnelActive": c.tailscale_funnel_domain.is_some(),
-                        "localIp": c.local_ip,
-                        "selectedPrinter": curr_printer
-                    });
-                    let mut resp = Response::from_string(json.to_string());
-                    resp.add_header(cors_origin);
-                    resp.add_header(cors_pna);
-                    resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-                    let _ = request.respond(resp);
-                    continue;
-                }
-
-                if url == "/printers" && method == Method::Get {
-                    let list = cache.lock().unwrap().printers.clone();
-                    let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
-                    let mut resp = Response::from_string(json);
-                    resp.add_header(cors_origin);
-                    resp.add_header(cors_pna);
-                    resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-                    let _ = request.respond(resp);
-                    continue;
-                }
-
-                if url == "/print-pdf" && method == Method::Post {
-                    let mut body_str = String::new();
-                    if let Err(_) = request.as_reader().read_to_string(&mut body_str) {
-                        let mut resp = Response::from_string(r#"{"success":false,"error":"Gagal membaca body request"}"#)
-                            .with_status_code(StatusCode(400));
-                        resp.add_header(cors_origin);
-                        resp.add_header(json_ct());
-                        let _ = request.respond(resp);
-                        continue;
-                    }
-
-                    #[derive(Deserialize)]
-                    #[serde(rename_all = "camelCase")]
-                    struct PrintPdfPayload {
-                        printer_name: Option<String>,
-                        filename: Option<String>,
-                        pdf_base64: Option<String>,
-                    }
-
-                    let parsed: Result<PrintPdfPayload, _> = serde_json::from_str(&body_str);
-                    match parsed {
-                        Ok(payload) if payload.pdf_base64.is_some() => {
-                            let base64_data = payload.pdf_base64.unwrap();
-                            let req_printer = bare_printer_name(&payload.printer_name.unwrap_or_default());
-                            let default_printer = selected_printer.lock().unwrap().clone();
-                            let final_printer = if !req_printer.is_empty() { req_printer } else { default_printer };
-                            let doc_name = payload.filename.unwrap_or_else(|| "Dokumen.pdf".to_string());
-
-                            match BASE64_STANDARD.decode(base64_data.trim()) {
-                                Ok(bytes) => {
-                                    let temp_dir = std::env::temp_dir();
-                                    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
-                                    let safe_name = format!("SIAP_{}_{}", timestamp, doc_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_"));
-                                    let temp_file_path = temp_dir.join(&safe_name);
-
-                                    if let Err(write_err) = fs::write(&temp_file_path, bytes) {
-                                        let err_msg = format!("Gagal menyimpan PDF sementara: {}", write_err);
-                                        let mut resp = Response::from_string(serde_json::json!({"success":false,"error": err_msg}).to_string())
-                                            .with_status_code(StatusCode(500));
-                                        resp.add_header(cors_origin);
-                                        resp.add_header(json_ct());
-                                        let _ = request.respond(resp);
-                                        continue;
-                                    }
-
-                                    let path_str = temp_file_path.to_string_lossy().to_string();
-                                    let print_res = print_pdf_to_windows(&path_str, &final_printer);
-
-                                    let (success, log_msg) = match print_res {
-                                        Ok(msg) => (true, msg),
-                                        Err(err) => (false, err),
-                                    };
-
-                                    let log_item = PrintLogItem {
-                                        id: timestamp as u64,
-                                        time: current_time_str(),
-                                        filename: doc_name.clone(),
-                                        printer: if final_printer.is_empty() { "Default Windows".to_string() } else { final_printer.clone() },
-                                        status: if success { "SUKSES".to_string() } else { "GAGAL".to_string() },
-                                        message: log_msg.clone(),
-                                    };
-
-                                    if let Ok(mut log_lock) = logs.lock() {
-                                        log_lock.insert(0, log_item.clone());
-                                        if log_lock.len() > 100 {
-                                            log_lock.pop();
-                                        }
-                                        save_logs(&log_lock);
-                                    }
-
-                                    // Emit event to frontend if app is available
-                                    if let Ok(handle_guard) = app_handle.lock() {
-                                        if let Some(h) = handle_guard.as_ref() {
-                                            let _ = h.emit("new_print_log", log_item);
-                                        }
-                                    }
-
-                                    let p_to_clean = temp_file_path.clone();
-                                    thread::spawn(move || {
-                                        thread::sleep(std::time::Duration::from_secs(60));
-                                        let _ = fs::remove_file(p_to_clean);
-                                    });
-
-                                    let resp_json = serde_json::json!({
-                                        "success": success,
-                                        "message": log_msg,
-                                        "error": if success { serde_json::Value::Null } else { serde_json::Value::String(log_msg.clone()) },
-                                        "printer": final_printer,
-                                        "filename": doc_name
-                                    });
-                                    let mut resp = Response::from_string(resp_json.to_string())
-                                        .with_status_code(StatusCode(if success { 200 } else { 500 }));
-                                    resp.add_header(cors_origin);
-                                    resp.add_header(cors_pna);
-                                    resp.add_header(json_ct());
-                                    let _ = request.respond(resp);
-                                }
-                                Err(decode_err) => {
-                                    let err_msg = format!("Format Base64 PDF tidak valid: {}", decode_err);
-                                    let mut resp = Response::from_string(serde_json::json!({"success":false,"error": err_msg}).to_string())
-                                        .with_status_code(StatusCode(400));
-                                    resp.add_header(cors_origin);
-                                    resp.add_header(json_ct());
-                                    let _ = request.respond(resp);
-                                }
-                            }
-                        }
-                        _ => {
-                            let mut resp = Response::from_string(r#"{"success":false,"error":"Body harus berisi pdfBase64"}"#)
-                                .with_status_code(StatusCode(400));
-                            resp.add_header(cors_origin);
-                            resp.add_header(json_ct());
-                            let _ = request.respond(resp);
-                        }
-                    }
-                    continue;
-                }
-
-                let mut resp = Response::from_string("Not Found").with_status_code(StatusCode(404));
-                resp.add_header(cors_origin);
-                let _ = request.respond(resp);
+            if let Ok(Some(request)) = server.recv_timeout(std::time::Duration::from_millis(500)) {
+                // Satu thread per request: /ping & /info tetap dijawab walau sedang mencetak
+                let ctx = ctx.clone();
+                thread::spawn(move || handle_request(request, &ctx));
             }
         }
         // `server` di-drop di sini sehingga port langsung dilepas
     });
 
     Ok(RunningServer { stop, handle })
+}
+
+/// Data bersama yang dibutuhkan penangan request.
+#[derive(Clone)]
+struct HandlerCtx {
+    port: u16,
+    last_request: Arc<Mutex<Option<String>>>,
+    logs: Arc<Mutex<Vec<PrintLogItem>>>,
+    selected_printer: Arc<Mutex<String>>,
+    cache: Arc<Mutex<CachedData>>,
+    app_handle: Arc<Mutex<Option<tauri::AppHandle>>>,
+}
+
+/// Pencetakan dijalankan satu per satu (antrian), walau request diterima paralel.
+static PRINT_LOCK: Mutex<()> = Mutex::new(());
+
+fn handle_request(mut request: tiny_http::Request, ctx: &HandlerCtx) {
+    let port = ctx.port;
+    let last_request = &ctx.last_request;
+    let logs = &ctx.logs;
+    let selected_printer = &ctx.selected_printer;
+    let cache = &ctx.cache;
+    let app_handle = &ctx.app_handle;
+    // Abaikan query string & garis miring akhir: "/ping/", "/ping?x=1" tetap dikenali
+    let raw_url = request.url().to_string();
+    let path = raw_url.split('?').next().unwrap_or("/").trim_end_matches('/');
+    let url = if path.is_empty() { "/".to_string() } else { path.to_string() };
+    let method = request.method().clone();
+    if method != Method::Options {
+        let from = match request.remote_addr() {
+            Some(a) if a.ip().is_loopback() => "Funnel/PC ini".to_string(),
+            Some(a) => a.ip().to_string(),
+            None => "-".to_string(),
+        };
+        if let Ok(mut lr) = last_request.lock() {
+            *lr = Some(format!("{} {} {} dari {}", current_time_str(), method, url, from));
+        }
+    }
+    let json_ct = || Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
+
+    let cors_origin = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
+    let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Origin, Content-Type, Accept, Authorization"[..]).unwrap();
+    let cors_methods = Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap();
+    let cors_pna = Header::from_bytes(&b"Access-Control-Allow-Private-Network"[..], &b"true"[..]).unwrap();
+
+    if method == Method::Options {
+        let mut resp = Response::empty(StatusCode(204));
+        resp.add_header(cors_origin);
+        resp.add_header(cors_headers);
+        resp.add_header(cors_methods);
+        resp.add_header(cors_pna);
+        let _ = request.respond(resp);
+        return;
+    }
+
+    if url == "/ping" && method == Method::Get {
+        let mut resp = Response::from_string("🖨️ SIAP Print Server is running");
+        resp.add_header(cors_origin);
+        resp.add_header(cors_pna);
+        let _ = request.respond(resp);
+        return;
+    }
+
+    if url == "/info" && method == Method::Get {
+        let c = cache.lock().unwrap().clone();
+        let curr_printer = selected_printer.lock().unwrap().clone();
+        let json = serde_json::json!({
+            "status": "online",
+            "version": env!("CARGO_PKG_VERSION"),
+            "port": port,
+            "tailscaleIp": c.tailscale_ip,
+            "tailscaleFunnelDomain": c.tailscale_funnel_domain,
+            "funnelActive": c.tailscale_funnel_domain.is_some(),
+            "localIp": c.local_ip,
+            "selectedPrinter": curr_printer
+        });
+        let mut resp = Response::from_string(json.to_string());
+        resp.add_header(cors_origin);
+        resp.add_header(cors_pna);
+        resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+        let _ = request.respond(resp);
+        return;
+    }
+
+    if url == "/printers" && method == Method::Get {
+        let list = cache.lock().unwrap().printers.clone();
+        let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
+        let mut resp = Response::from_string(json);
+        resp.add_header(cors_origin);
+        resp.add_header(cors_pna);
+        resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+        let _ = request.respond(resp);
+        return;
+    }
+
+    if url == "/print-pdf" && method == Method::Post {
+        let mut body_str = String::new();
+        if let Err(_) = request.as_reader().read_to_string(&mut body_str) {
+            let mut resp = Response::from_string(r#"{"success":false,"error":"Gagal membaca body request"}"#)
+                .with_status_code(StatusCode(400));
+            resp.add_header(cors_origin);
+            resp.add_header(json_ct());
+            let _ = request.respond(resp);
+            return;
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct PrintPdfPayload {
+            printer_name: Option<String>,
+            filename: Option<String>,
+            pdf_base64: Option<String>,
+        }
+
+        let parsed: Result<PrintPdfPayload, _> = serde_json::from_str(&body_str);
+        match parsed {
+            Ok(payload) if payload.pdf_base64.is_some() => {
+                let base64_data = payload.pdf_base64.unwrap();
+                let req_printer = bare_printer_name(&payload.printer_name.unwrap_or_default());
+                let default_printer = selected_printer.lock().unwrap().clone();
+                let final_printer = if !req_printer.is_empty() { req_printer } else { default_printer };
+                let doc_name = payload.filename.unwrap_or_else(|| "Dokumen.pdf".to_string());
+
+                match BASE64_STANDARD.decode(base64_data.trim()) {
+                    Ok(bytes) => {
+                        let temp_dir = std::env::temp_dir();
+                        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+                        let safe_name = format!("SIAP_{}_{}", timestamp, doc_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_"));
+                        let temp_file_path = temp_dir.join(&safe_name);
+
+                        if let Err(write_err) = fs::write(&temp_file_path, bytes) {
+                            let err_msg = format!("Gagal menyimpan PDF sementara: {}", write_err);
+                            let mut resp = Response::from_string(serde_json::json!({"success":false,"error": err_msg}).to_string())
+                                .with_status_code(StatusCode(500));
+                            resp.add_header(cors_origin);
+                            resp.add_header(json_ct());
+                            let _ = request.respond(resp);
+                            return;
+                        }
+
+                        let path_str = temp_file_path.to_string_lossy().to_string();
+                        let print_res = {
+                        let _antrian = PRINT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                        print_pdf_to_windows(&path_str, &final_printer)
+                    };
+
+                        let (success, log_msg) = match print_res {
+                            Ok(msg) => (true, msg),
+                            Err(err) => (false, err),
+                        };
+
+                        let log_item = PrintLogItem {
+                            id: timestamp as u64,
+                            time: current_time_str(),
+                            filename: doc_name.clone(),
+                            printer: if final_printer.is_empty() { "Default Windows".to_string() } else { final_printer.clone() },
+                            status: if success { "SUKSES".to_string() } else { "GAGAL".to_string() },
+                            message: log_msg.clone(),
+                        };
+
+                        if let Ok(mut log_lock) = logs.lock() {
+                            log_lock.insert(0, log_item.clone());
+                            if log_lock.len() > 100 {
+                                log_lock.pop();
+                            }
+                            save_logs(&log_lock);
+                        }
+
+                        // Emit event to frontend if app is available
+                        if let Ok(handle_guard) = app_handle.lock() {
+                            if let Some(h) = handle_guard.as_ref() {
+                                let _ = h.emit("new_print_log", log_item);
+                            }
+                        }
+
+                        let p_to_clean = temp_file_path.clone();
+                        thread::spawn(move || {
+                            thread::sleep(std::time::Duration::from_secs(60));
+                            let _ = fs::remove_file(p_to_clean);
+                        });
+
+                        let resp_json = serde_json::json!({
+                            "success": success,
+                            "message": log_msg,
+                            "error": if success { serde_json::Value::Null } else { serde_json::Value::String(log_msg.clone()) },
+                            "printer": final_printer,
+                            "filename": doc_name
+                        });
+                        let mut resp = Response::from_string(resp_json.to_string())
+                            .with_status_code(StatusCode(if success { 200 } else { 500 }));
+                        resp.add_header(cors_origin);
+                        resp.add_header(cors_pna);
+                        resp.add_header(json_ct());
+                        let _ = request.respond(resp);
+                    }
+                    Err(decode_err) => {
+                        let err_msg = format!("Format Base64 PDF tidak valid: {}", decode_err);
+                        let mut resp = Response::from_string(serde_json::json!({"success":false,"error": err_msg}).to_string())
+                            .with_status_code(StatusCode(400));
+                        resp.add_header(cors_origin);
+                        resp.add_header(json_ct());
+                        let _ = request.respond(resp);
+                    }
+                }
+            }
+            _ => {
+                let mut resp = Response::from_string(r#"{"success":false,"error":"Body harus berisi pdfBase64"}"#)
+                    .with_status_code(StatusCode(400));
+                resp.add_header(cors_origin);
+                resp.add_header(json_ct());
+                let _ = request.respond(resp);
+            }
+        }
+        return;
+    }
+
+    let mut resp = Response::from_string("Not Found").with_status_code(StatusCode(404));
+    resp.add_header(cors_origin);
+    let _ = request.respond(resp);
 }
 
 /// Menghentikan server yang berjalan dan MENUNGGU thread-nya selesai (≤ 0,5 detik)
@@ -858,6 +888,67 @@ fn start_server(state: &AppState, port: u16) -> Result<(), String> {
                 state.is_running.store(false, Ordering::SeqCst);
                 *state.server_error.lock().unwrap() = Some(e.clone());
                 Err(e)
+            }
+        }
+    }
+}
+
+/// Penjaga server (tiap 5 detik). Menjamin port BENAR-BENAR dilayani selama server diaktifkan:
+/// - instance ini belum memegang port (mis. saat dibuka port dipakai SIAP Print lain / layanan startup)
+///   -> begitu pemilik port berhenti, instance ini langsung mengambil alih;
+/// - listener milik sendiri tidak menjawab /ping 3x berturut-turut -> dinyalakan ulang.
+/// Tanpa ini, Funnel membalas HTTP 502 karena tidak ada yang mendengarkan di port.
+fn server_watchdog(
+    is_running: Arc<AtomicBool>,
+    port_ref: Arc<AtomicU16>,
+    slot: Arc<Mutex<Option<RunningServer>>>,
+    server_error: Arc<Mutex<Option<String>>>,
+    ctx: HandlerCtx,
+) {
+    let mut fails = 0u32;
+    loop {
+        thread::sleep(std::time::Duration::from_secs(5));
+        if !is_running.load(Ordering::SeqCst) {
+            fails = 0;
+            continue;
+        }
+        let port = port_ref.load(Ordering::SeqCst);
+        let owns = slot.lock().map(|g| g.is_some()).unwrap_or(false);
+        if owns {
+            if check_existing_siap_server(port) {
+                fails = 0;
+                continue;
+            }
+            fails += 1;
+            if fails < 3 {
+                continue;
+            }
+            stop_server(&slot);
+        } else if check_existing_siap_server(port) {
+            // Dilayani instance SIAP Print lain: tidak perlu apa-apa
+            continue;
+        }
+        fails = 0;
+        match start_http_listener(
+            port,
+            Arc::clone(&ctx.last_request),
+            Arc::clone(&ctx.logs),
+            Arc::clone(&ctx.selected_printer),
+            Arc::clone(&ctx.cache),
+            Arc::clone(&ctx.app_handle),
+        ) {
+            Ok(srv) => {
+                if let Ok(mut g) = slot.lock() {
+                    *g = Some(srv);
+                }
+                if let Ok(mut e) = server_error.lock() {
+                    *e = None;
+                }
+            }
+            Err(e) => {
+                if let Ok(mut g) = server_error.lock() {
+                    *g = Some(e);
+                }
             }
         }
     }
@@ -1273,6 +1364,21 @@ pub fn run() {
     }
     if let Err(e) = start_server(&app_state, saved_cfg.port) {
         eprintln!("Warning: could not auto start server: {}", e);
+    }
+    {
+        let is_running = Arc::clone(&app_state.is_running);
+        let port_ref = Arc::clone(&app_state.port);
+        let slot = Arc::clone(&app_state.server);
+        let server_error = Arc::clone(&app_state.server_error);
+        let ctx = HandlerCtx {
+            port: 0,
+            last_request: Arc::clone(&app_state.last_request),
+            logs: Arc::clone(&app_state.logs),
+            selected_printer: Arc::clone(&app_state.selected_printer),
+            cache: Arc::clone(&app_state.cache),
+            app_handle: Arc::clone(&app_state.app_handle),
+        };
+        thread::spawn(move || server_watchdog(is_running, port_ref, slot, server_error, ctx));
     }
 
     tauri::Builder::default()
