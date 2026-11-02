@@ -2,7 +2,7 @@
 
 **SIAP Print Tailscale** adalah aplikasi desktop Windows ringan berbasis **Tauri v2 (Rust + Vanilla JS)**. Aplikasi ini menjadi jembatan cetak dokumen resmi (PIB, Dokap, dan Berita Acara Pemeriksaan / BAP) dari aplikasi **SIAP NEO** (KPU Bea Cukai Tanjung Priok) ke printer kantor (mis. Kyocera TASKalfa). Jalur yang didukung: **Tailscale Funnel**, **IP Tailscale**, atau **Wi-Fi kantor**.
 
-Versi saat ini: **1.3.0**
+Versi saat ini: **1.4.3**
 
 ---
 
@@ -39,7 +39,7 @@ Pilih mode **Otomatis** agar SIAP NEO mencoba Funnel → IP Tailscale → IP LAN
 ## File Eksekusi
 
 - `SIAP-Print-Tailscale.exe` (root repositori): versi terbaru, ditandatangani.
-- Berkas berversi (`SIAP-Print-Tailscale-v1.3.0-windows-x64.exe`) tersedia di halaman GitHub Releases.
+- Berkas berversi (`SIAP-Print-Tailscale-v1.4.3-windows-x64.exe`) tersedia di halaman GitHub Releases.
 
 ---
 
@@ -52,7 +52,7 @@ Server mendengarkan di `0.0.0.0:<port>` (default `1234`). Query string dan garis
    ```json
    {
      "status": "online",
-     "version": "1.3.0",
+     "version": "1.4.3",
      "port": 1234,
      "tailscaleIp": "100.113.7.91",
      "tailscaleFunnelDomain": "pc.tailnet.ts.net",

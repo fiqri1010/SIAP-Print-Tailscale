@@ -35,37 +35,53 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # 3. Buat Catatan Rilis Dinamis & Unik
-$tag = "v1.4.2"
+$tag = "v1.4.3"
 $dateStr = Get-Date -Format "dd MMMM yyyy, HH:mm:ss"
 $gitHash = (git rev-parse --short HEAD)
 
 $releaseNotes = @"
-## SIAP Print Tailscale $tag (Official Release)
+# 🖨️ SIAP Print Tailscale $tag — Production Release
 
-Dipublikasikan secara resmi pada: **$dateStr**
-Commit Ref: \`$gitHash\`
-
-### 🌟 Fitur Baru & Pembaruan (v1.4.0)
-1. **Opsi Pengaturan 'Open when Startup' (Buka saat Startup Windows)**
-   - Tersedia opsi untuk mengaktifkan peluncuran otomatis saat Windows pertama kali menyala.
-2. **Mulai Sebelum Login Layar Kunci Windows (System Boot Service)**
-   - **Fitur Khusus Kantor:** Aplikasi dapat didaftarkan sebagai Windows Scheduled Task (`ONSTART` level SYSTEM).
-   - Server HTTP dan Tailscale Funnel langsung aktif saat PC dihidupkan, sehingga petugas Android (SIAP NEO) di lapangan dapat langsung mencetak dokumen kapan saja **tanpa perlu menunggu ada petugas yang membuka kunci/login ke Windows**.
-3. **Aturan 'Minimize to Tray when Startup'**
-   - Pengguna dapat memilih apakah aplikasi saat startup langsung bersembunyi di System Tray pojok kanan bawah (`--hidden`), atau langsung membuka jendela utama di layar desktop.
-4. **Shared Configuration & Persistent Logs di ProgramData**
-   - Konfigurasi printer default dan riwayat cetak disimpan terpusat di `%ProgramData%\SIAP-Print-Tailscale\`, sehingga dapat diakses bersama secara konsisten oleh layanan sistem boot maupun pengguna interaktif.
-5. **Multi-Instance & Boot Server Auto-Detection**
-   - Aplikasi desktop mendeteksi otomatis jika server cetak sudah berjalan di latar belakang sebagai layanan boot (`127.0.0.1:port/ping`), menampilkan status aktif tanpa konflik port.
-6. **Deteksi Otomatis Alamat Tailscale Funnel (HTTPS) & VPN Mesh**
-   - Mendeteksi domain publik `https://fqrbc.taile81f15.ts.net`, IP Tailscale, dan IP LAN lokal.
-7. **Penyaringan Printer Fisik Kantor**
-   - Printer virtual PDF otomatis disaring; mendeteksi dan siap mencetak ke **Kyocera TASKalfa MZ3200i KX**.
-8. **Tanda Tangan Digital Authenticode**
-   - Binary eksekusi ditandatangani secara digital dengan sertifikat resmi dan stempel waktu DigiCert.
+> **Waktu Rilis:** $dateStr (WIB)  
+> **Platform Target:** Windows 10 / Windows 11 (x64)  
+> **Commit Hash:** \`$gitHash\`  
+> **Distribusi:** Single Executable Portable (Standalone)
 
 ---
-*KPU Bea Cukai Tanjung Priok • SIAP NEO Ecosystem*
+
+## 🚀 Ringkasan Pembaruan & Fitur Rilis v1.4.3
+
+### 1. 🛡️ Proteksi Single-Instance Mutex & Dialog Peringatan Native Win32
+- Menggunakan kernel mutex terisolasi tingkat sesi (\Local\SIAP_Print_Tailscale_SingleInstance_Mutex\).
+- Mencegah pengguna atau sistem membuka aplikasi berulang kali secara tidak sengaja.
+- Jika instance kedua dijalankan, kotak pesan native Windows langsung ditampilkan:
+  > **"Aplikasi telah terbuka, tidak bisa buka 2 jendela sekaligus"**
+- Jendela aplikasi utama yang sedang berjalan (meskipun sedang diminimalkan ke System Tray) akan otomatis dipulihkan ke layar kerja dan difokuskan ke depan (\SetForegroundWindow\).
+
+### 2. ⚙️ Manajemen Fleksibel Peluncuran Startup Windows
+- **Open when Startup:** Dapat diaktifkan/dinonaktifkan langsung dari dashboard aplikasi.
+- **Boot Service Sebelum Login Layar Kunci:** Terintegrasi dengan Windows Task Scheduler (\ONSTART\ mode SYSTEM) sehingga server cetak Tailscale langsung aktif saat PC dinyalakan tanpa perlu login interaktif terlebih dahulu.
+- **Minimize to Tray when Startup:** Opsi peluncuran di latar belakang System Tray (\--hidden\) saat komputer menyala agar tidak mengganggu antarmuka desktop kantor.
+
+### 3. 🧹 Manajemen Workspace & Kebersihan Rilis
+- Pembersihan berkas biner versi sebelumnya dari direktori distribusi, menyisakan biner rilis terkini (\SIAP-Print-Tailscale-v1.4.3-windows-x64.exe\) dan berkas eksekusi utama portabel (\SIAP-Print-Tailscale.exe\).
+- Pengoptimalan ukuran biner dan penghapusan duplikasi berkas build lama.
+
+### 4. 🖨️ Penanganan Pencetakan Dokumen SIAP NEO Terpadu
+- Penyaringan printer virtual otomatis (hanya menampilkan printer fisik aktif seperti Kyocera TASKalfa).
+- Deteksi dinamis endpoint Tailscale Funnel (HTTPS publik), Tailscale IP, dan IP LAN lokal.
+- Penyimpanan konfigurasi bersama dan log riwayat cetak di \%ProgramData%\SIAP-Print-Tailscale\.
+
+### 5. ✍️ Tanda Tangan Digital Authenticode
+- File binary eksekusi portabel telah ditandatangani secara digital dengan sertifikat resmi dan stempel waktu DigiCert Timestamping.
+
+---
+
+## 📦 Berkas Rilis
+- **SIAP-Print-Tailscale-v1.4.3-windows-x64.exe** (Single Portable Executable, siap pakai tanpa instalasi)
+
+---
+*KPU Bea dan Cukai Tipe A Tanjung Priok • SIAP NEO Ecosystem*
 "@
 
 $notesFile = "$env:TEMP\siap_release_notes.md"
@@ -73,7 +89,7 @@ $releaseNotes | Out-File -FilePath $notesFile -Encoding utf8
 
 # 4. Buat Rilis di GitHub beserta File Executable
 Write-Host "[3/4] Menerbitkan Rilis $tag ke GitHub Releases..." -ForegroundColor Yellow
-$releaseExe = Join-Path $repoDir "SIAP-Print-Tailscale-v1.4.2-windows-x64.exe"
+$releaseExe = Join-Path $repoDir "SIAP-Print-Tailscale-v1.4.3-windows-x64.exe"
 
 & $ghExe release create $tag $releaseExe `
     --repo "fiqri1010/SIAP-Print-Tailscale" `
