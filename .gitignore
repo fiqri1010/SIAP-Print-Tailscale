@@ -13,8 +13,8 @@ dist-ssr
 *.local
 
 # Rust & Tauri Build outputs
-src-tauri/target/
-target/
+src-tauri/target*/
+target*/
 src-tauri/gen/schemas/
 
 # Editor directories and files

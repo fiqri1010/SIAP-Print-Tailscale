@@ -26,6 +26,7 @@ const inputPort = document.getElementById('input-port');
 const chkAutoStart = document.getElementById('chk-auto-start');
 const chkStartBeforeLogin = document.getElementById('chk-start-before-login');
 const chkMinimizeToTray = document.getElementById('chk-minimize-to-tray');
+const chkMinimizeOnExit = document.getElementById('chk-minimize-on-exit');
 const startupSubOptions = document.getElementById('startup-sub-options');
 const btnSaveSettings = document.getElementById('btn-save-settings');
 
@@ -43,7 +44,6 @@ const firewallBanner = document.getElementById('firewall-banner');
 const firewallText = document.getElementById('firewall-text');
 const btnAllowFirewall = document.getElementById('btn-allow-firewall');
 const serverErrorBanner = document.getElementById('server-error-banner');
-const sumatraBanner = document.getElementById('sumatra-banner');
 
 const chkKeepFunnel = document.getElementById('chk-keep-funnel');
 const peerList = document.getElementById('peer-list');
@@ -136,7 +136,6 @@ function renderStatus(status) {
   } else {
     serverErrorBanner.classList.add('hidden');
   }
-  sumatraBanner.classList.toggle('hidden', !!status.sumatra_path);
 
   // Port & Startup checkboxes
   if (!isUserEditingPort) {
@@ -149,6 +148,9 @@ function renderStatus(status) {
     startupSubOptions.classList.toggle('disabled', !status.auto_start_startup);
   }
   chkMinimizeToTray.checked = status.minimize_to_tray_on_startup !== false;
+  if (chkMinimizeOnExit) {
+    chkMinimizeOnExit.checked = status.minimize_on_exit !== false;
+  }
 
   // Printers dropdown (Virtual PDF filtered out)
   renderPrinters(status.printers, status.selected_printer);
@@ -349,6 +351,7 @@ btnSaveSettings.addEventListener('click', async () => {
     const autoStart = chkAutoStart.checked;
     const startBeforeLogin = chkStartBeforeLogin.checked;
     const minimizeToTray = chkMinimizeToTray.checked;
+    const minimizeOnExit = chkMinimizeOnExit ? chkMinimizeOnExit.checked : true;
 
     const updated = await invoke('update_settings', {
       newPort,
@@ -356,6 +359,7 @@ btnSaveSettings.addEventListener('click', async () => {
       autoStart,
       startBeforeLogin,
       minimizeToTray,
+      minimizeOnExit,
     });
     renderStatus(updated);
     showToast('✅ Pengaturan Port & Startup Windows berhasil disimpan!');

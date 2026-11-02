@@ -1,4 +1,6 @@
 use std::fs;
+use std::io::Write;
+use std::net::TcpStream;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
@@ -6,7 +8,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -42,6 +44,37 @@ unsafe extern "system" {
     ) -> *mut std::ffi::c_void;
     fn ShowWindow(hwnd: *mut std::ffi::c_void, n_cmd_show: i32) -> i32;
     fn SetForegroundWindow(hwnd: *mut std::ffi::c_void) -> i32;
+}
+
+#[repr(C)]
+struct DocInfo1W {
+    p_doc_name: *const u16,
+    p_output_file: *const u16,
+    p_datatype: *const u16,
+}
+
+#[link(name = "winspool")]
+unsafe extern "system" {
+    fn OpenPrinterW(
+        p_printer_name: *const u16,
+        ph_printer: *mut *mut std::ffi::c_void,
+        p_default: *const std::ffi::c_void,
+    ) -> i32;
+    fn StartDocPrinterW(
+        h_printer: *mut std::ffi::c_void,
+        level: u32,
+        p_doc_info: *const DocInfo1W,
+    ) -> u32;
+    fn StartPagePrinter(h_printer: *mut std::ffi::c_void) -> i32;
+    fn WritePrinter(
+        h_printer: *mut std::ffi::c_void,
+        p_buf: *const u8,
+        cb_buf: u32,
+        pc_written: *mut u32,
+    ) -> i32;
+    fn EndPagePrinter(h_printer: *mut std::ffi::c_void) -> i32;
+    fn EndDocPrinter(h_printer: *mut std::ffi::c_void) -> i32;
+    fn ClosePrinter(h_printer: *mut std::ffi::c_void) -> i32;
 }
 
 const ERROR_ALREADY_EXISTS: u32 = 183;
@@ -149,6 +182,8 @@ pub struct AppConfig {
     pub start_before_login: bool,
     #[serde(default = "default_true")]
     pub minimize_to_tray_on_startup: bool,
+    #[serde(default = "default_true")]
+    pub minimize_on_exit: bool,
     /// Aktifkan ulang Funnel otomatis bila hilang (mis. setelah `tailscale reset`). Diatur pengguna.
     #[serde(default)]
     pub keep_funnel: bool,
@@ -196,6 +231,7 @@ pub struct AppStatus {
     pub auto_start_startup: bool,
     pub start_before_login: bool,
     pub minimize_to_tray_on_startup: bool,
+    pub minimize_on_exit: bool,
     pub printers: Vec<PrinterInfo>,
     pub logs: Vec<PrintLogItem>,
     pub firewall_ok: bool,
@@ -220,6 +256,7 @@ pub struct AppState {
     pub auto_start_startup: Arc<AtomicBool>,
     pub start_before_login: Arc<AtomicBool>,
     pub minimize_to_tray_on_startup: Arc<AtomicBool>,
+    pub minimize_on_exit: Arc<AtomicBool>,
     pub logs: Arc<Mutex<Vec<PrintLogItem>>>,
     pub cache: Arc<Mutex<CachedData>>,
     pub server: Arc<Mutex<Option<RunningServer>>>,
@@ -389,6 +426,7 @@ fn load_config() -> AppConfig {
         auto_start_startup: false,
         start_before_login: false,
         minimize_to_tray_on_startup: true,
+        minimize_on_exit: true,
         keep_funnel: false,
     }
 }
@@ -573,7 +611,107 @@ fn query_system_info_silent(port: u16) -> CachedData {
     }
 }
 
-fn print_pdf_to_windows(file_path: &str, target_printer: &str) -> Result<String, String> {
+fn print_pdf_raw_spooler(printer_name: &str, pdf_bytes: &[u8], doc_title: &str) -> Result<String, String> {
+    let wide_name = to_wide(printer_name);
+    let mut h_printer: *mut std::ffi::c_void = std::ptr::null_mut();
+
+    let open_ok = unsafe { OpenPrinterW(wide_name.as_ptr(), &mut h_printer, std::ptr::null()) };
+    if open_ok == 0 || h_printer.is_null() {
+        return Err(format!("Gagal membuka handle printer '{}' di Spooler Windows", printer_name));
+    }
+
+    struct PrinterCloser(*mut std::ffi::c_void);
+    impl Drop for PrinterCloser {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    ClosePrinter(self.0);
+                }
+            }
+        }
+    }
+    let _closer = PrinterCloser(h_printer);
+
+    let wide_doc = to_wide(doc_title);
+    let wide_raw = to_wide("RAW");
+    let doc_info = DocInfo1W {
+        p_doc_name: wide_doc.as_ptr(),
+        p_output_file: std::ptr::null(),
+        p_datatype: wide_raw.as_ptr(),
+    };
+
+    let job_id = unsafe { StartDocPrinterW(h_printer, 1, &doc_info) };
+    if job_id == 0 {
+        return Err(format!("Gagal memulai dokumen spooling pada printer '{}'", printer_name));
+    }
+
+    unsafe {
+        StartPagePrinter(h_printer);
+        let mut written: u32 = 0;
+        let write_ok = WritePrinter(
+            h_printer,
+            pdf_bytes.as_ptr(),
+            pdf_bytes.len() as u32,
+            &mut written,
+        );
+        EndPagePrinter(h_printer);
+        EndDocPrinter(h_printer);
+
+        if write_ok == 0 || written != pdf_bytes.len() as u32 {
+            return Err("Gagal menulis data dokumen ke antrian printer".to_string());
+        }
+    }
+
+    Ok(format!("Dicetak via Windows Spooler RAW ke '{}' (Job #{})", printer_name, job_id))
+}
+
+fn print_direct_network(ip: &str, pdf_bytes: &[u8]) -> Result<String, String> {
+    let addr = format!("{}:9100", ip);
+    let socket_addr: std::net::SocketAddr = addr
+        .parse()
+        .map_err(|e| format!("Alamat IP printer tidak valid: {}", e))?;
+
+    let mut stream = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(5))
+        .map_err(|e| format!("Gagal menghubungi printer di {}: {}", addr, e))?;
+
+    stream
+        .set_write_timeout(Some(Duration::from_secs(30)))
+        .map_err(|e| e.to_string())?;
+
+    stream
+        .write_all(pdf_bytes)
+        .map_err(|e| format!("Gagal mengirim data cetak ke printer: {}", e))?;
+
+    stream.flush().map_err(|e| e.to_string())?;
+    Ok(format!("Dicetak via Direct TCP RAW ({}:9100)", ip))
+}
+
+fn print_pdf_to_windows(file_path: &str, target_printer: &str, printer_port: Option<&str>) -> Result<String, String> {
+    let pdf_bytes = fs::read(file_path).map_err(|e| format!("Gagal membaca berkas PDF: {}", e))?;
+    let doc_title = std::path::Path::new(file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("SIAP_Document.pdf");
+
+    // 1. Prioritas Utama: Jika printer adalah printer jaringan dengan port IP (mis. Kyocera di 192.168.38.14:9100)
+    // Kirim langsung ke hardware printer tanpa butuh viewer eksternal apapun!
+    if let Some(port) = printer_port {
+        let trimmed_port = port.trim();
+        if trimmed_port.parse::<std::net::Ipv4Addr>().is_ok() {
+            if let Ok(msg) = print_direct_network(trimmed_port, &pdf_bytes) {
+                return Ok(msg);
+            }
+        }
+    }
+
+    // 2. Prioritas Kedua: Windows Spooler RAW API (Native Windows Print Spooler langsung ke driver)
+    if !target_printer.is_empty() {
+        if let Ok(msg) = print_pdf_raw_spooler(target_printer, &pdf_bytes, doc_title) {
+            return Ok(msg);
+        }
+    }
+
+    // 3. Fallback: SumatraPDF (jika terinstal di sistem)
     if let Some(sumatra_exe) = find_sumatra() {
         let mut cmd = Command::new(&sumatra_exe);
         cmd.creation_flags(CREATE_NO_WINDOW);
@@ -583,27 +721,28 @@ fn print_pdf_to_windows(file_path: &str, target_printer: &str) -> Result<String,
             cmd.args(["-print-to", target_printer, "-silent", file_path]);
         }
 
-        match cmd.output() {
-            Ok(output) if output.status.success() => Ok("Dicetak via SumatraPDF".to_string()),
-            Ok(output) => Err(format!("SumatraPDF error: {}", String::from_utf8_lossy(&output.stderr))),
-            Err(e) => Err(format!("Gagal mengeksekusi SumatraPDF: {}", e)),
+        if let Ok(output) = cmd.output() {
+            if output.status.success() {
+                return Ok("Dicetak via SumatraPDF".to_string());
+            }
         }
-    } else {
-        let ps_cmd = if target_printer.is_empty() {
-            format!("Start-Process -FilePath \"{}\" -Verb Print -PassThru | Out-Null", file_path)
-        } else {
-            format!("Start-Process -FilePath \"{}\" -Verb PrintTo -ArgumentList '\"{}\"' -PassThru | Out-Null", file_path, target_printer)
-        };
+    }
 
-        match Command::new("powershell")
-            .args(["-NoProfile", "-Command", &ps_cmd])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-        {
-            Ok(output) if output.status.success() => Ok("Dicetak via Windows Shell".to_string()),
-            Ok(output) => Err(format!("Print command error: {}", String::from_utf8_lossy(&output.stderr))),
-            Err(e) => Err(format!("Gagal mengeksekusi print: {}", e)),
-        }
+    // 4. Fallback Terakhir: Windows Shell PrintTo (WindowStyle Hidden)
+    let ps_cmd = if target_printer.is_empty() {
+        format!("Start-Process -FilePath \"{}\" -Verb Print -WindowStyle Hidden -PassThru | Out-Null", file_path)
+    } else {
+        format!("Start-Process -FilePath \"{}\" -Verb PrintTo -ArgumentList '\"{}\"' -WindowStyle Hidden -PassThru | Out-Null", file_path, target_printer)
+    };
+
+    match Command::new("powershell")
+        .args(["-NoProfile", "-Command", &ps_cmd])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
+        Ok(output) if output.status.success() => Ok("Dicetak via Windows Print Shell".to_string()),
+        Ok(output) => Err(format!("Print command error: {}", String::from_utf8_lossy(&output.stderr))),
+        Err(e) => Err(format!("Gagal mengeksekusi print: {}", e)),
     }
 }
 
@@ -892,10 +1031,17 @@ fn handle_request(mut request: tiny_http::Request, ctx: &HandlerCtx) {
                         }
 
                         let path_str = temp_file_path.to_string_lossy().to_string();
+                        let printer_port = {
+                            let c = cache.lock().unwrap();
+                            c.printers
+                                .iter()
+                                .find(|p| p.name.eq_ignore_ascii_case(&final_printer))
+                                .map(|p| p.port.clone())
+                        };
                         let print_res = {
-                        let _antrian = PRINT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-                        print_pdf_to_windows(&path_str, &final_printer)
-                    };
+                            let _antrian = PRINT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                            print_pdf_to_windows(&path_str, &final_printer, printer_port.as_deref())
+                        };
 
                         let (success, log_msg) = match print_res {
                             Ok(msg) => (true, msg),
@@ -1109,6 +1255,7 @@ fn get_app_status(state: State<AppState>) -> AppStatus {
     let auto_start_startup = state.auto_start_startup.load(Ordering::SeqCst);
     let start_before_login = state.start_before_login.load(Ordering::SeqCst);
     let minimize_to_tray_on_startup = state.minimize_to_tray_on_startup.load(Ordering::SeqCst);
+    let minimize_on_exit = state.minimize_on_exit.load(Ordering::SeqCst);
     let logs = state.logs.lock().unwrap().clone();
     let cache = state.cache.lock().unwrap().clone();
 
@@ -1125,6 +1272,7 @@ fn get_app_status(state: State<AppState>) -> AppStatus {
         auto_start_startup,
         start_before_login,
         minimize_to_tray_on_startup,
+        minimize_on_exit,
         printers: cache.printers,
         logs,
         firewall_ok: cache.firewall_ok && cache.firewall_port == port,
@@ -1195,6 +1343,7 @@ fn persist_config(state: &AppState) {
         auto_start_startup: state.auto_start_startup.load(Ordering::SeqCst),
         start_before_login: state.start_before_login.load(Ordering::SeqCst),
         minimize_to_tray_on_startup: state.minimize_to_tray_on_startup.load(Ordering::SeqCst),
+        minimize_on_exit: state.minimize_on_exit.load(Ordering::SeqCst),
         keep_funnel: state.keep_funnel.load(Ordering::SeqCst),
     });
 }
@@ -1281,6 +1430,7 @@ fn save_printer_default(printer_name: String, state: State<AppState>) -> Result<
         auto_start_startup: state.auto_start_startup.load(Ordering::SeqCst),
         start_before_login: state.start_before_login.load(Ordering::SeqCst),
         minimize_to_tray_on_startup: state.minimize_to_tray_on_startup.load(Ordering::SeqCst),
+        minimize_on_exit: state.minimize_on_exit.load(Ordering::SeqCst),
         keep_funnel: state.keep_funnel.load(Ordering::SeqCst),
     };
     save_config(&cfg);
@@ -1295,6 +1445,7 @@ fn update_settings(
     auto_start: bool,
     start_before_login: bool,
     minimize_to_tray: bool,
+    minimize_on_exit: bool,
     state: State<AppState>,
 ) -> Result<AppStatus, String> {
     let old_port = state.port.load(Ordering::SeqCst);
@@ -1303,6 +1454,7 @@ fn update_settings(
     state.auto_start_startup.store(auto_start, Ordering::SeqCst);
     state.start_before_login.store(start_before_login, Ordering::SeqCst);
     state.minimize_to_tray_on_startup.store(minimize_to_tray, Ordering::SeqCst);
+    state.minimize_on_exit.store(minimize_on_exit, Ordering::SeqCst);
 
     let cfg = AppConfig {
         port: new_port,
@@ -1310,6 +1462,7 @@ fn update_settings(
         auto_start_startup: auto_start,
         start_before_login,
         minimize_to_tray_on_startup: minimize_to_tray,
+        minimize_on_exit,
         keep_funnel: state.keep_funnel.load(Ordering::SeqCst),
     };
     save_config(&cfg);
@@ -1439,6 +1592,7 @@ pub fn run() {
     let auto_start_startup = Arc::new(AtomicBool::new(saved_cfg.auto_start_startup));
     let start_before_login = Arc::new(AtomicBool::new(saved_cfg.start_before_login));
     let minimize_to_tray_on_startup = Arc::new(AtomicBool::new(saved_cfg.minimize_to_tray_on_startup));
+    let minimize_on_exit = Arc::new(AtomicBool::new(saved_cfg.minimize_on_exit));
     let logs = Arc::new(Mutex::new(load_logs()));
     let app_handle_holder = Arc::new(Mutex::new(None));
 
@@ -1466,6 +1620,7 @@ pub fn run() {
         auto_start_startup,
         start_before_login,
         minimize_to_tray_on_startup,
+        minimize_on_exit,
         logs,
         cache,
         server: Arc::new(Mutex::new(None)),
@@ -1571,8 +1726,17 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close();
+                let should_minimize = window
+                    .try_state::<AppState>()
+                    .map(|s| s.minimize_on_exit.load(Ordering::SeqCst))
+                    .unwrap_or(true);
+
+                if should_minimize {
+                    let _ = window.hide();
+                    api.prevent_close();
+                } else {
+                    window.app_handle().exit(0);
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![

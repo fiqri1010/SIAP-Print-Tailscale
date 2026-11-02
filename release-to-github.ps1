@@ -35,7 +35,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # 3. Buat Catatan Rilis Dinamis & Unik
-$tag = "v1.4.3"
+$tag = "v1.4.4"
 $dateStr = Get-Date -Format "dd MMMM yyyy, HH:mm:ss"
 $gitHash = (git rev-parse --short HEAD)
 
@@ -49,28 +49,33 @@ $releaseNotes = @"
 
 ---
 
-## 🚀 Ringkasan Pembaruan & Fitur Rilis v1.4.3
+## 🚀 Ringkasan Pembaruan & Fitur Rilis v1.4.4
 
-### 1. 🛡️ Proteksi Single-Instance Mutex & Dialog Peringatan Native Win32
-- Menggunakan kernel mutex terisolasi tingkat sesi (\Local\SIAP_Print_Tailscale_SingleInstance_Mutex\).
+### 1. 🖨️ Pencetakan Mandiri Native Tanpa PDF Viewer Pihak Ketiga
+- **Bebas Ketergantungan Eksternal:** Aplikasi kini tidak lagi memerlukan SumatraPDF, Adobe Acrobat, Edge, atau aplikasi viewer pihak ketiga untuk mencetak dokumen PDF.
+- **Direct Hardware & RAW Spooler Engine:** 
+  - Dokumen resmi (PIB, BAP, Dokap) dari SIAP NEO langsung dikirimkan ke mesin antrean cetak sistem Windows menggunakan **Windows Spooler API (RAW Datatype via \winspool.drv\)**.
+  - Untuk printer jaringan kantor (seperti **Kyocera TASKalfa MZ3200i KX** di port IP 9100), transmisi data dilakukan secara langsung melalui koneksi stream RAW TCP berkecepatan tinggi.
+- **100% Silent & Anti Pop-Up:** Tidak ada lagi jendela viewer luar yang terbuka atau mencuri fokus kerja pengguna saat dokumen dicetak.
+- **Pembersihan Antarmuka:** Banner peringatan *"⚠️ SumatraPDF tidak ditemukan"* telah dihapus total dari dashboard aplikasi.
+
+### 2. 🗕 Pengaturan Baru "Minimize to Tray saat Ditutup (Minimize on Exit)"
+- Pengguna kini dapat memilih perilaku tombol silang (X) jendela aplikasi:
+  - **Aktif (Default):** Menekan tombol X tidak mematikan server cetak, melainkan menyembunyikan jendela ke System Tray pojok kanan bawah agar server cetak terus siap menerima kiriman dokumen dari HP Android SIAP NEO di lapangan.
+  - **Nonaktif:** Menekan tombol X akan menutup aplikasi sepenuhnya (proses exit bersih).
+- Pengaturan tersimpan secara permanen di konfigurasi sistem (`%ProgramData%\SIAP-Print-Tailscale\config.json`).
+
+### 3. 🛡️ Proteksi Single-Instance Mutex & Dialog Native Win32
+- Menggunakan kernel mutex Windows terisolasi tingkat sesi (\Local\SIAP_Print_Tailscale_SingleInstance_Mutex\).
 - Mencegah pengguna atau sistem membuka aplikasi berulang kali secara tidak sengaja.
-- Jika instance kedua dijalankan, kotak pesan native Windows langsung ditampilkan:
+- Jika instance kedua dijalankan, kotak pesan dialog native Windows langsung ditampilkan:
   > **"Aplikasi telah terbuka, tidak bisa buka 2 jendela sekaligus"**
-- Jendela aplikasi utama yang sedang berjalan (meskipun sedang diminimalkan ke System Tray) akan otomatis dipulihkan ke layar kerja dan difokuskan ke depan (\SetForegroundWindow\).
+- Jendela aplikasi utama yang sedang berjalan otomatis dipulihkan ke layar kerja dan difokuskan ke depan (\SetForegroundWindow\).
 
-### 2. ⚙️ Manajemen Fleksibel Peluncuran Startup Windows
+### 4. ⚙️ Manajemen Fleksibel Peluncuran Startup Windows
 - **Open when Startup:** Dapat diaktifkan/dinonaktifkan langsung dari dashboard aplikasi.
 - **Boot Service Sebelum Login Layar Kunci:** Terintegrasi dengan Windows Task Scheduler (\ONSTART\ mode SYSTEM) sehingga server cetak Tailscale langsung aktif saat PC dinyalakan tanpa perlu login interaktif terlebih dahulu.
-- **Minimize to Tray when Startup:** Opsi peluncuran di latar belakang System Tray (\--hidden\) saat komputer menyala agar tidak mengganggu antarmuka desktop kantor.
-
-### 3. 🧹 Manajemen Workspace & Kebersihan Rilis
-- Pembersihan berkas biner versi sebelumnya dari direktori distribusi, menyisakan biner rilis terkini (\SIAP-Print-Tailscale-v1.4.3-windows-x64.exe\) dan berkas eksekusi utama portabel (\SIAP-Print-Tailscale.exe\).
-- Pengoptimalan ukuran biner dan penghapusan duplikasi berkas build lama.
-
-### 4. 🖨️ Penanganan Pencetakan Dokumen SIAP NEO Terpadu
-- Penyaringan printer virtual otomatis (hanya menampilkan printer fisik aktif seperti Kyocera TASKalfa).
-- Deteksi dinamis endpoint Tailscale Funnel (HTTPS publik), Tailscale IP, dan IP LAN lokal.
-- Penyimpanan konfigurasi bersama dan log riwayat cetak di \%ProgramData%\SIAP-Print-Tailscale\.
+- **Minimize to Tray when Startup:** Opsi peluncuran di latar belakang System Tray (\--hidden\) saat komputer menyala.
 
 ### 5. ✍️ Tanda Tangan Digital Authenticode
 - File binary eksekusi portabel telah ditandatangani secara digital dengan sertifikat resmi dan stempel waktu DigiCert Timestamping.
@@ -78,7 +83,7 @@ $releaseNotes = @"
 ---
 
 ## 📦 Berkas Rilis
-- **SIAP-Print-Tailscale-v1.4.3-windows-x64.exe** (Single Portable Executable, siap pakai tanpa instalasi)
+- **SIAP-Print-Tailscale-v1.4.4-windows-x64.exe** (Single Portable Executable, langsung pakai tanpa instalasi)
 
 ---
 *KPU Bea dan Cukai Tipe A Tanjung Priok • SIAP NEO Ecosystem*
@@ -89,7 +94,7 @@ $releaseNotes | Out-File -FilePath $notesFile -Encoding utf8
 
 # 4. Buat Rilis di GitHub beserta File Executable
 Write-Host "[3/4] Menerbitkan Rilis $tag ke GitHub Releases..." -ForegroundColor Yellow
-$releaseExe = Join-Path $repoDir "SIAP-Print-Tailscale-v1.4.3-windows-x64.exe"
+$releaseExe = Join-Path $repoDir "SIAP-Print-Tailscale-v1.4.4-windows-x64.exe"
 
 & $ghExe release create $tag $releaseExe `
     --repo "fiqri1010/SIAP-Print-Tailscale" `

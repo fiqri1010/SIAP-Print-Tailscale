@@ -15,7 +15,7 @@
           <img src="assets/printer.svg" alt="Printer" width="32" height="32" />
         </div>
         <div>
-          <h1 class="brand-title">SIAP Print Tailscale <span class="version-tag">v1.4.3</span></h1>
+          <h1 class="brand-title">SIAP Print Tailscale <span class="version-tag">v1.4.4</span></h1>
           <p class="brand-subtitle">KPU Bea Cukai Tanjung Priok • Jembatan Cetak Dokumen Resmi</p>
         </div>
       </div>
@@ -112,9 +112,6 @@
         <button id="btn-allow-firewall" class="btn btn-tiny btn-outline">Izinkan di Firewall</button>
       </section>
       <section id="server-error-banner" class="alert-box alert-warning hidden"></section>
-      <section id="sumatra-banner" class="alert-box alert-warning hidden">
-        ⚠️ SumatraPDF tidak ditemukan. Pencetakan memakai Windows Shell (kurang andal). Pasang SumatraPDF untuk cetak senyap.
-      </section>
 
       <!-- Server & Startup Configuration -->
       <section class="card settings-card">
@@ -170,6 +167,18 @@
                 <span class="checkbox-label">
                   <strong>Minimize to Tray saat Startup</strong>
                   <span class="sub-label-hint">Saat Windows menyala, aplikasi langsung bersembunyi di System Tray pojok kanan bawah tanpa memunculkan jendela di layar. (Bila dimatikan, jendela utama langsung terbuka).</span>
+                </span>
+              </label>
+            </div>
+
+            <!-- Opsi 3: Minimize on Exit -->
+            <div class="config-group">
+              <label class="checkbox-container main-setting-toggle">
+                <input type="checkbox" id="chk-minimize-on-exit" />
+                <span class="checkmark"></span>
+                <span class="checkbox-label">
+                  <strong>Minimize to Tray saat Ditutup (Minimize on Exit)</strong>
+                  <span class="sub-label-hint">Saat tombol silang (X) jendela ditekan, aplikasi disembunyikan ke System Tray agar server tetap aktif mencetak di latar belakang. (Bila dinonaktifkan, tombol X akan menutup aplikasi sepenuhnya).</span>
                 </span>
               </label>
             </div>
