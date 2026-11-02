@@ -17,6 +17,12 @@ src-tauri/target*/
 target*/
 src-tauri/gen/schemas/
 
+# C# / .NET Build outputs
+[Bb]in/
+[Oo]bj/
+*.user
+publish-*/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
