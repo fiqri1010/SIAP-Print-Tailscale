@@ -164,6 +164,15 @@ public static class NativePdfPrinter
                     MmToHundredthsInch(m.Left), MmToHundredthsInch(m.Right),
                     MmToHundredthsInch(m.Top), MmToHundredthsInch(m.Bottom));
             }
+            else
+            {
+                // Margin bawaan: gunakan batas wajar cetak (4 mm / ~16 hundredths inch)
+                // agar halaman otomatis pas (auto-fit) kiri-kanan-atas-bawah dan tidak
+                // terpotong, menggantikan margin default GDI+ 1 inci (25.4 mm) yang terlalu besar.
+                int defaultMargin = MmToHundredthsInch(4.0);
+                printDoc.DefaultPageSettings.Margins = new Margins(
+                    defaultMargin, defaultMargin, defaultMargin, defaultMargin);
+            }
 
             // v2.1: hanya halaman terpilih
             var pageList = ParsePageRange(options.Pages, totalPages);
@@ -201,6 +210,29 @@ public static class NativePdfPrinter
 
                     // Hitung batas cetak
                     var printArea = e.MarginBounds;
+                    try
+                    {
+                        var printable = e.PageSettings.PrintableArea;
+                        if (printable.Width > 0 && printable.Height > 0)
+                        {
+                            int pLeft = (int)Math.Ceiling(printable.Left);
+                            int pTop = (int)Math.Ceiling(printable.Top);
+                            int pRight = (int)Math.Floor(printable.Right);
+                            int pBottom = (int)Math.Floor(printable.Bottom);
+
+                            int left = Math.Max(printArea.Left, pLeft);
+                            int top = Math.Max(printArea.Top, pTop);
+                            int right = Math.Min(printArea.Right, pRight);
+                            int bottom = Math.Min(printArea.Bottom, pBottom);
+
+                            if (right > left && bottom > top)
+                            {
+                                printArea = new Rectangle(left, top, right - left, bottom - top);
+                            }
+                        }
+                    }
+                    catch { }
+
                     if (printArea.Width <= 0 || printArea.Height <= 0)
                     {
                         printArea = e.PageBounds;
