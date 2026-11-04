@@ -38,9 +38,10 @@ if ($LASTEXITCODE -ne 0) {
 $csprojPath = Join-Path $repoDir "src-csharp\SIAP-Print-Tailscale.csproj"
 $version = "2.2.0"
 if (Test-Path $csprojPath) {
-    $csprojContent = [xml](Get-Content $csprojPath)
-    if ($csprojContent.Project.PropertyGroup.Version) {
-        $version = $csprojContent.Project.PropertyGroup.Version.Trim()
+    [xml]$xml = Get-Content $csprojPath
+    $verNode = $xml.SelectSingleNode("//Version")
+    if ($verNode) {
+        $version = $verNode.InnerText.Trim()
     }
 }
 $tag = "v$version"
