@@ -1,5 +1,5 @@
 # ==============================================================================
-# Script Otomatis Rilis GitHub untuk SIAP-Print-Tailscale
+# Script Otomatis Rilis GitHub untuk SIAP-Print-Tailscale (100% C# .NET)
 # ==============================================================================
 $ErrorActionPreference = "Stop"
 
@@ -34,8 +34,16 @@ if ($LASTEXITCODE -ne 0) {
     git push -u origin master
 }
 
-# 3. Buat Catatan Rilis Dinamis & Unik
-$tag = "v1.4.4"
+# 3. Dapatkan Versi dari Project C# .NET
+$csprojPath = Join-Path $repoDir "src-csharp\SIAP-Print-Tailscale.csproj"
+$version = "2.1.1"
+if (Test-Path $csprojPath) {
+    $csprojContent = [xml](Get-Content $csprojPath)
+    if ($csprojContent.Project.PropertyGroup.Version) {
+        $version = $csprojContent.Project.PropertyGroup.Version.Trim()
+    }
+}
+$tag = "v$version"
 $dateStr = Get-Date -Format "dd MMMM yyyy, HH:mm:ss"
 $gitHash = (git rev-parse --short HEAD)
 
@@ -44,46 +52,41 @@ $releaseNotes = @"
 
 > **Waktu Rilis:** $dateStr (WIB)  
 > **Platform Target:** Windows 10 / Windows 11 (x64)  
+> **Arsitektur:** 100% C# .NET 8 Standalone (Native Windows Runtime)  
 > **Commit Hash:** \`$gitHash\`  
 > **Distribusi:** Single Executable Portable (Standalone)
 
 ---
 
-## 🚀 Ringkasan Pembaruan & Fitur Rilis v1.4.4
+## 🚀 Ringkasan Fitur & Pembaruan Rilis $tag
 
-### 1. 🖨️ Pencetakan Mandiri Native Tanpa PDF Viewer Pihak Ketiga
-- **Bebas Ketergantungan Eksternal:** Aplikasi kini tidak lagi memerlukan SumatraPDF, Adobe Acrobat, Edge, atau aplikasi viewer pihak ketiga untuk mencetak dokumen PDF.
-- **Direct Hardware & RAW Spooler Engine:** 
-  - Dokumen resmi (PIB, BAP, Dokap) dari SIAP NEO langsung dikirimkan ke mesin antrean cetak sistem Windows menggunakan **Windows Spooler API (RAW Datatype via \winspool.drv\)**.
-  - Untuk printer jaringan kantor (seperti **Kyocera TASKalfa MZ3200i KX** di port IP 9100), transmisi data dilakukan secara langsung melalui koneksi stream RAW TCP berkecepatan tinggi.
-- **100% Silent & Anti Pop-Up:** Tidak ada lagi jendela viewer luar yang terbuka atau mencuri fokus kerja pengguna saat dokumen dicetak.
-- **Pembersihan Antarmuka:** Banner peringatan *"⚠️ SumatraPDF tidak ditemukan"* telah dihapus total dari dashboard aplikasi.
+### 1. ⚡ 100% Native C# / .NET 8 Standalone
+- Beroperasi tanpa dependensi Node.js, V8 engine, Tauri, maupun runtime eksternal.
+- Sangat hemat memori (hanya ~25–40 MB RAM) dengan responsivitas tinggi.
+- Menggunakan ASP.NET Core Kestrel terintegrasi untuk endpoint HTTP lokal dan jaringan Tailscale.
 
-### 2. 🗕 Pengaturan Baru "Minimize to Tray saat Ditutup (Minimize on Exit)"
-- Pengguna kini dapat memilih perilaku tombol silang (X) jendela aplikasi:
-  - **Aktif (Default):** Menekan tombol X tidak mematikan server cetak, melainkan menyembunyikan jendela ke System Tray pojok kanan bawah agar server cetak terus siap menerima kiriman dokumen dari HP Android SIAP NEO di lapangan.
-  - **Nonaktif:** Menekan tombol X akan menutup aplikasi sepenuhnya (proses exit bersih).
-- Pengaturan tersimpan secara permanen di konfigurasi sistem (`%ProgramData%\SIAP-Print-Tailscale\config.json`).
+### 2. 🖨️ PDF Engine Mandiri Presisi (Windows.Data.Pdf)
+- Merender dokumen per halaman menjadi grafis resolusi tinggi 300 DPI melalui Windows Runtime (`Windows.Data.Pdf`) bawaan Windows 10/11.
+- Penyaluran langsung via Windows Print Spooler GDI+ (`PrintDocument`) tanpa memerlukan software viewer pihak ketiga seperti SumatraPDF atau Acrobat.
+- **Akurasi Halaman 100%:** Jumlah halaman tercetak persis sesuai dokumen asli.
+- **100% Silent:** Tidak membuka jendela PDF viewer atau pop-up eksternal apa pun saat mencetak.
 
-### 3. 🛡️ Proteksi Single-Instance Mutex & Dialog Native Win32
-- Menggunakan kernel mutex Windows terisolasi tingkat sesi (\Local\SIAP_Print_Tailscale_SingleInstance_Mutex\).
-- Mencegah pengguna atau sistem membuka aplikasi berulang kali secara tidak sengaja.
-- Jika instance kedua dijalankan, kotak pesan dialog native Windows langsung ditampilkan:
-  > **"Aplikasi telah terbuka, tidak bisa buka 2 jendela sekaligus"**
-- Jendela aplikasi utama yang sedang berjalan otomatis dipulihkan ke layar kerja dan difokuskan ke depan (\SetForegroundWindow\).
+### 3. 📄 Pengaturan Cetak Terpadu dari SIAP NEO
+- Mendukung kustomisasi ukuran kertas (A4, F4), margin khusus dalam milimeter, dan pemilihan rentang halaman langsung dari aplikasi mobile SIAP NEO.
 
-### 4. ⚙️ Manajemen Fleksibel Peluncuran Startup Windows
-- **Open when Startup:** Dapat diaktifkan/dinonaktifkan langsung dari dashboard aplikasi.
-- **Boot Service Sebelum Login Layar Kunci:** Terintegrasi dengan Windows Task Scheduler (\ONSTART\ mode SYSTEM) sehingga server cetak Tailscale langsung aktif saat PC dinyalakan tanpa perlu login interaktif terlebih dahulu.
-- **Minimize to Tray when Startup:** Opsi peluncuran di latar belakang System Tray (\--hidden\) saat komputer menyala.
+### 4. 🚀 Tailscale Funnel & Multi-Jaringan
+- Deteksi dinamis endpoint Tailscale Funnel publik (HTTPS), Tailscale IP, dan IP LAN lokal kantor.
+- Dukungan satu-klik untuk pemeriksaan dan pembukaan port Windows Firewall.
 
-### 5. ✍️ Tanda Tangan Digital Authenticode
-- File binary eksekusi portabel telah ditandatangani secara digital dengan sertifikat resmi dan stempel waktu DigiCert Timestamping.
+### 5. 🛡️ Proteksi Single-Instance Mutex & Tray Management
+- Proteksi Mutex sesi kernel Windows terisolasi untuk mencegah duplikasi instance.
+- Dialog peringatan otomatis dan auto-focus ke jendela utama jika dibuka berulang.
+- Pilihan fleksibel startup Windows (*Open when Startup*, *Minimize to Tray*, dan *Minimize to Tray on Exit*).
 
 ---
 
 ## 📦 Berkas Rilis
-- **SIAP-Print-Tailscale-v1.4.4-windows-x64.exe** (Single Portable Executable, langsung pakai tanpa instalasi)
+- **SIAP-Print-Tailscale-$tag-windows-x64.exe** (Single Portable Executable, siap pakai tanpa instalasi)
 
 ---
 *KPU Bea dan Cukai Tipe A Tanjung Priok • SIAP NEO Ecosystem*
@@ -94,7 +97,10 @@ $releaseNotes | Out-File -FilePath $notesFile -Encoding utf8
 
 # 4. Buat Rilis di GitHub beserta File Executable
 Write-Host "[3/4] Menerbitkan Rilis $tag ke GitHub Releases..." -ForegroundColor Yellow
-$releaseExe = Join-Path $repoDir "SIAP-Print-Tailscale-v1.4.4-windows-x64.exe"
+$releaseExe = Join-Path $repoDir "SIAP-Print-Tailscale-$tag-windows-x64.exe"
+if (-not (Test-Path $releaseExe)) {
+    $releaseExe = Join-Path $repoDir "SIAP-Print-Tailscale.exe"
+}
 
 & $ghExe release create $tag $releaseExe `
     --repo "fiqri1010/SIAP-Print-Tailscale" `
