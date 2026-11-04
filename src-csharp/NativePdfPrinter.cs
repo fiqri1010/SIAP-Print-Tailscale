@@ -1,8 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Printing;
 using System.IO;
-using System.Text;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Windows.Data.Pdf;
@@ -17,7 +18,6 @@ namespace SiapPrintServer;
 /// kemudian mengirimkannya melalui Windows Print Spooler (GDI+ PrintDocument) ke driver printer resmi.
 /// Mencegah kerusakan PDF dan menjamin jumlah halaman tercetak persis sesuai dokumen asli.
 /// </summary>
-/// <summary>Pilihan cetak dari SIAP NEO (v2.1). Semua opsional; null = perilaku lama.</summary>
 public record PrintOptions(string? PaperSize, MarginsMmDto? MarginsMm, string? Pages)
 {
     public static readonly PrintOptions Default = new(null, null, null);
@@ -125,6 +125,7 @@ public static class NativePdfPrinter
         try
         {
             await File.WriteAllBytesAsync(tempFilePath, pdfBytes);
+            pdfBytes = null!; // Bebaskan referensi memori buffer besar
 
             // 1. Muat dokumen melalui Windows.Data.Pdf
             var storageFile = await StorageFile.GetFileFromPathAsync(tempFilePath);
@@ -294,6 +295,7 @@ public static class NativePdfPrinter
             catch { }
 
             PrintLock.Release();
+            MemoryHelper.TrimWorkingSet();
         }
     }
 

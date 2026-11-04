@@ -17,6 +17,11 @@ public static class ConfigManager
 
     private static readonly object FileLock = new();
 
+    private static readonly JsonSerializerOptions IndentedJsonOptions = new()
+    {
+        WriteIndented = true
+    };
+
     public static event Action<PrintLogItem>? LogAdded;
 
     static ConfigManager()
@@ -59,7 +64,7 @@ public static class ConfigManager
             try
             {
                 if (!Directory.Exists(DataDir)) Directory.CreateDirectory(DataDir);
-                string json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
+                string json = JsonSerializer.Serialize(config, IndentedJsonOptions);
                 File.WriteAllText(ConfigPath, json);
             }
             catch { }
@@ -94,12 +99,12 @@ public static class ConfigManager
                 if (!Directory.Exists(DataDir)) Directory.CreateDirectory(DataDir);
                 var logs = LoadLogs();
                 logs.Insert(0, item);
-                if (logs.Count > 200)
+                if (logs.Count > 100)
                 {
-                    logs = logs.GetRange(0, 200);
+                    logs = logs.GetRange(0, 100);
                 }
 
-                string json = JsonSerializer.Serialize(logs, new JsonSerializerOptions { WriteIndented = true });
+                string json = JsonSerializer.Serialize(logs, IndentedJsonOptions);
                 File.WriteAllText(LogsPath, json);
             }
             catch { }

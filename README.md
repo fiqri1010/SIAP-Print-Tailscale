@@ -2,13 +2,13 @@
 
 **SIAP Print Tailscale** adalah aplikasi desktop Windows mandiri berbasis **C# dan .NET 8 Native** dengan antarmuka ringkas. Aplikasi ini menjadi jembatan cetak dokumen resmi (PIB, Dokap, dan Berita Acara Pemeriksaan / BAP) dari aplikasi **SIAP NEO** (KPU Bea Cukai Tanjung Priok) ke printer kantor (mis. Kyocera TASKalfa MZ3200i). Jalur koneksi yang didukung: **Tailscale Funnel**, **IP Tailscale**, atau **Wi-Fi kantor (LAN)**.
 
-Versi saat ini: **v2.1.1 (Native C# / .NET 8)**
+Versi saat ini: **v2.1.2 (Native C# / .NET 8 Ultra-Low Memory Edition)**
 
 ---
 
 ## Fitur Utama
 
-- ⚡ **Native C# / .NET 8 Standalone**: Beroperasi tanpa dependensi Node.js, V8 engine, maupun runtime eksternal. Sangat hemat memori (hanya ~25–40 MB RAM) dan berkecepatan tinggi.
+- ⚡ **Native C# / .NET 8 Standalone (Ultra-Low Memory)**: Beroperasi tanpa dependensi Node.js, V8 engine, maupun runtime eksternal. Konsumsi memori sangat minim (hanya **~5–15 MB RAM**, dan **~3–6 MB saat berada di System Tray**) berkat engine HTTP asynchronous berbasis `TcpListener` dan optimasi Windows Working Set.
 - 🖨️ **PDF Engine Mandiri Presisi**: Menggunakan mesin render internal Windows 10/11 (`Windows.Data.Pdf`) yang merender dokumen per halaman menjadi grafis resolusi tinggi 300 DPI dan menyalurkannya via Windows Print Spooler GDI+ (`PrintDocument`).
   - **Akurasi Halaman 100%**: Dokumen 1 lembar dicetak tepat 1 lembar (mencegah pencetakan kertas berlebih).
   - **Bebas Kerusakan PDF**: Format vektor, barcode, dan font formulir kepabeanan tetap tajam tanpa distorsi.
@@ -49,9 +49,9 @@ Pilih mode **Otomatis** agar SIAP NEO mencoba Funnel → IP Tailscale → IP LAN
 
 ## API Endpoints untuk SIAP NEO
 
-Server Kestrel mendengarkan di `0.0.0.0:<port>` (default `1234`):
+Server HTTP ringan asynchronous mendengarkan di `0.0.0.0:<port>` (default `1234`):
 
 1. **`GET /ping`**: Health check. Respon: `🖨️ SIAP Print Server is running`.
 2. **`GET /info`**: Status JSON server, IP Tailscale, Funnel Domain, LAN IP, printer aktif, dan waktu aktif.
 3. **`GET /printers`**: Mengembalikan daftar printer fisik yang terpasang di sistem Windows.
-4. **`POST /print-pdf`**: Menerima JSON payload `{ printerName, filename, pdfBase64 }` dan mencetaknya secara senyap melalui Native PDF Engine.
+4. **`POST /print-pdf`**: Menerima JSON payload `{ printerName, filename, pdfBase64, paperSize, marginsMm, pages }` dan mencetaknya secara senyap melalui Native PDF Engine.

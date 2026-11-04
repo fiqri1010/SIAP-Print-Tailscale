@@ -10,18 +10,19 @@
     <AssemblyName>SIAP-Print-Tailscale</AssemblyName>
     <RootNamespace>SiapPrintServer</RootNamespace>
     
-    <Version>2.1.1</Version>
-    <AssemblyVersion>2.1.1.0</AssemblyVersion>
-    <FileVersion>2.1.1.0</FileVersion>
+    <Version>2.1.2</Version>
+    <AssemblyVersion>2.1.2.0</AssemblyVersion>
+    <FileVersion>2.1.2.0</FileVersion>
     <Title>SIAP Print Tailscale Server</Title>
     <Product>SIAP Print Tailscale</Product>
     <Company>KPPBC TMP A Tanjung Priok</Company>
-    <Description>Server Pencetakan Mandiri Tailscale &amp; Native Windows PDF Engine untuk SIAP NEO</Description>
-  </PropertyGroup>
+    <Description>Server Pencetakan Mandiri Tailscale &amp; Native Windows PDF Engine untuk SIAP NEO (Ultra-Low Memory Edition)</Description>
 
-  <ItemGroup>
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
-  </ItemGroup>
+    <!-- Optimasi Performa & Memori (Minimal RAM Footprint) -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+  </PropertyGroup>
 
   <ItemGroup>
     <Content Include="app.ico">

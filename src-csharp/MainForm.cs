@@ -31,6 +31,7 @@ public class MainForm : Form
     private CheckBox _chkMinExit = null!;
     private ToolStripStatusLabel _statusLabel = null!;
     private ToolStripStatusLabel _ramLabel = null!;
+    private int _diagTickCount = 0;
 
     private bool _reallyExit = false;
 
@@ -93,6 +94,23 @@ public class MainForm : Form
             ShowInTaskbar = false;
             Opacity = 0;
         }
+
+        Shown += (s, e) =>
+        {
+            if (startMinimized)
+            {
+                Hide();
+            }
+            MemoryHelper.TrimWorkingSet();
+        };
+
+        Resize += (s, e) =>
+        {
+            if (WindowState == FormWindowState.Minimized)
+            {
+                MemoryHelper.TrimWorkingSet();
+            }
+        };
     }
 
     private void InitializeComponents()
@@ -396,6 +414,7 @@ public class MainForm : Form
             {
                 e.Cancel = true;
                 Hide();
+                MemoryHelper.TrimWorkingSet();
                 _trayIcon.ShowBalloonTip(2000, "SIAP Print Tailscale", "Aplikasi disembunyikan ke System Tray dan tetap aktif menerima dokumen cetak.", ToolTipIcon.Info);
             }
         };
@@ -587,6 +606,12 @@ public class MainForm : Form
     {
         try
         {
+            _diagTickCount++;
+            if ((!Visible || WindowState == FormWindowState.Minimized) && _diagTickCount % 5 == 0)
+            {
+                MemoryHelper.TrimWorkingSet();
+            }
+
             using var proc = Process.GetCurrentProcess();
             long memoryMb = proc.WorkingSet64 / (1024 * 1024);
             _ramLabel.Text = $"RAM: {memoryMb} MB";
