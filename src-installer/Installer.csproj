@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>..\src-csharp\app.ico</ApplicationIcon>
+    <AssemblyName>SIAP-Print-Tailscale-Setup</AssemblyName>
+    <RootNamespace>SiapPrintInstaller</RootNamespace>
+    
+    <Version>2.2.0</Version>
+    <AssemblyVersion>2.2.0.0</AssemblyVersion>
+    <FileVersion>2.2.0.0</FileVersion>
+    <Title>SIAP Print Tailscale Setup</Title>
+    <Product>SIAP Print Tailscale</Product>
+    <Company>KPPBC TMP A Tanjung Priok</Company>
+    <Description>Installer Mandiri SIAP Print Tailscale untuk Windows</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\SIAP-Print-Tailscale.exe">
+      <Link>SIAP-Print-Tailscale.exe</Link>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\src-csharp\app.ico">
+      <Link>app.ico</Link>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>

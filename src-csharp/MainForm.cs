@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -630,10 +631,25 @@ public class MainForm : Form
         catch { }
     }
 
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    private static extern uint RegisterWindowMessage(string lpString);
+
+    private static readonly uint WmShowWindow = RegisterWindowMessage("SIAP_PRINT_TAILSCALE_SHOW_WINDOW");
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WmShowWindow)
+        {
+            ShowAndRestore();
+            return;
+        }
+        base.WndProc(ref m);
+    }
+
     public void ShowAndRestore()
     {
-        Show();
-        WindowState = FormWindowState.Normal;
+        if (!Visible) Show();
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         ShowInTaskbar = true;
         Opacity = 1;
         BringToFront();

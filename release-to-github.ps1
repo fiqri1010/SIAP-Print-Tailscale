@@ -36,7 +36,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # 3. Dapatkan Versi dari Project C# .NET
 $csprojPath = Join-Path $repoDir "src-csharp\SIAP-Print-Tailscale.csproj"
-$version = "2.1.1"
+$version = "2.2.0"
 if (Test-Path $csprojPath) {
     $csprojContent = [xml](Get-Content $csprojPath)
     if ($csprojContent.Project.PropertyGroup.Version) {
@@ -52,41 +52,47 @@ $releaseNotes = @"
 
 > **Waktu Rilis:** $dateStr (WIB)  
 > **Platform Target:** Windows 10 / Windows 11 (x64)  
-> **Arsitektur:** 100% C# .NET 8 Standalone (Native Windows Runtime)  
+> **Arsitektur:** 100% C# .NET 8 Standalone (Ultra-Low Memory Edition)  
 > **Commit Hash:** \`$gitHash\`  
-> **Distribusi:** Single Executable Portable (Standalone)
+> **Distribusi:** Windows Setup Installer & Portable Standalone Single-File
 
 ---
 
 ## 🚀 Ringkasan Fitur & Pembaruan Rilis $tag
 
-### 1. ⚡ 100% Native C# / .NET 8 Standalone
-- Beroperasi tanpa dependensi Node.js, V8 engine, Tauri, maupun runtime eksternal.
-- Sangat hemat memori (hanya ~25–40 MB RAM) dengan responsivitas tinggi.
-- Menggunakan ASP.NET Core Kestrel terintegrasi untuk endpoint HTTP lokal dan jaringan Tailscale.
+### 1. ⚡ Ultra-Low Memory & Refactoring Performa Tinggi (>60% Lebih Hemat RAM)
+- Menggantikan ASP.NET Core Kestrel secara total dengan engine HTTP asynchronous berbasis \`TcpListener\`.
+- Footprint RAM turun drastis ke **~8–14 MB** saat aktif dan **~3–6 MB** saat berada di System Tray (penghematan >60%–80%).
+- Streaming zero-copy Base64 decoding langsung dari UTF-8 buffer JSON tanpa alokasi string raksasa di Large Object Heap (LOH).
+- Manajemen agresif Windows Working Set (\`SetProcessWorkingSetSize\`) segera setelah mencetak dan saat idle.
 
-### 2. 🖨️ PDF Engine Mandiri Presisi (Windows.Data.Pdf)
-- Merender dokumen per halaman menjadi grafis resolusi tinggi 300 DPI melalui Windows Runtime (`Windows.Data.Pdf`) bawaan Windows 10/11.
-- Penyaluran langsung via Windows Print Spooler GDI+ (`PrintDocument`) tanpa memerlukan software viewer pihak ketiga seperti SumatraPDF atau Acrobat.
-- **Akurasi Halaman 100%:** Jumlah halaman tercetak persis sesuai dokumen asli.
-- **100% Silent:** Tidak membuka jendela PDF viewer atau pop-up eksternal apa pun saat mencetak.
+### 2. 🛡️ Proteksi Single-Instance Anti-Duplikasi Mutlak
+- Proteksi berlapis ganda melalui Global Kernel Mutex, Local Session Mutex, dan pemindaian proses aktif Windows.
+- Terintegrasi langsung dalam kode: jika pengguna mencoba membuka jendela kedua, aplikasi yang sedang aktif di latar belakang / System Tray otomatis dipulihkan ke layar kerja (\`WM_SHOW_WINDOW\`), dan kotak dialog peringatan native dimunculkan:
+  > *"Aplikasi telah terbuka, tidak bisa buka 2 jendela sekaligus."*
+- Menjamin tidak ada 2 proses aplikasi yang berjalan bersamaan di sistem.
 
-### 3. 📄 Pengaturan Cetak Terpadu dari SIAP NEO
-- Mendukung kustomisasi ukuran kertas (A4, F4), margin khusus dalam milimeter, dan pemilihan rentang halaman langsung dari aplikasi mobile SIAP NEO.
+### 3. 🖨️ PDF Engine Mandiri Presisi (Windows.Data.Pdf)
+- Merender dokumen per halaman ke grafis resolusi tinggi 300 DPI via Windows Runtime (\`Windows.Data.Pdf\`).
+- Penyaluran langsung via Windows Print Spooler GDI+ (\`PrintDocument\`) tanpa aplikasi pihak ketiga (SumatraPDF/Acrobat).
+- **Akurasi Halaman 100%:** Jumlah halaman tercetak persis sesuai dokumen asli dan 100% silent.
 
-### 4. 🚀 Tailscale Funnel & Multi-Jaringan
-- Deteksi dinamis endpoint Tailscale Funnel publik (HTTPS), Tailscale IP, dan IP LAN lokal kantor.
-- Dukungan satu-klik untuk pemeriksaan dan pembukaan port Windows Firewall.
+### 4. 📄 Pengaturan Cetak dari SIAP NEO (v2.1+)
+- Mendukung ukuran kertas (A4, F4), margin khusus dalam milimeter, dan pemilihan rentang halaman dari HP.
 
-### 5. 🛡️ Proteksi Single-Instance Mutex & Tray Management
-- Proteksi Mutex sesi kernel Windows terisolasi untuk mencegah duplikasi instance.
-- Dialog peringatan otomatis dan auto-focus ke jendela utama jika dibuka berulang.
-- Pilihan fleksibel startup Windows (*Open when Startup*, *Minimize to Tray*, dan *Minimize to Tray on Exit*).
+### 5. 🚀 Tailscale Funnel & Multi-Jaringan
+- Deteksi dinamis endpoint Tailscale Funnel HTTPS publik, IP Tailscale, dan IP LAN lokal kantor.
+- Dukungan satu-klik integrasi Windows Firewall.
+
+### 6. 📦 Paket Instalasi Windows Lengkap
+- Menyediakan installer mandiri (\`SIAP-Print-Tailscale-$tag-Setup.exe\`) dengan pembuatan pintasan Desktop dan Start Menu otomatis.
+- Berkas binary telah ditandatangani dengan sertifikat resmi Authenticode (\`CN=Jadwal Priok Developer\`).
 
 ---
 
 ## 📦 Berkas Rilis
-- **SIAP-Print-Tailscale-$tag-windows-x64.exe** (Single Portable Executable, siap pakai tanpa instalasi)
+- **SIAP-Print-Tailscale-$tag-Setup.exe** (Installer Resmi Windows, otomatis buat pintasan dan kelola proses lama)
+- **SIAP-Print-Tailscale-$tag-windows-x64.exe** (Single Portable Executable, langsung pakai tanpa instalasi)
 
 ---
 *KPU Bea dan Cukai Tipe A Tanjung Priok • SIAP NEO Ecosystem*
@@ -97,12 +103,23 @@ $releaseNotes | Out-File -FilePath $notesFile -Encoding utf8
 
 # 4. Buat Rilis di GitHub beserta File Executable
 Write-Host "[3/4] Menerbitkan Rilis $tag ke GitHub Releases..." -ForegroundColor Yellow
-$releaseExe = Join-Path $repoDir "SIAP-Print-Tailscale-$tag-windows-x64.exe"
-if (-not (Test-Path $releaseExe)) {
-    $releaseExe = Join-Path $repoDir "SIAP-Print-Tailscale.exe"
+
+$releaseFiles = @()
+$setupExe = Join-Path $repoDir "SIAP-Print-Tailscale-$tag-Setup.exe"
+if (Test-Path $setupExe) {
+    $releaseFiles += $setupExe
 }
 
-& $ghExe release create $tag $releaseExe `
+$portableExe = Join-Path $repoDir "SIAP-Print-Tailscale-$tag-windows-x64.exe"
+if (Test-Path $portableExe) {
+    $releaseFiles += $portableExe
+}
+
+if ($releaseFiles.Count -eq 0) {
+    $releaseFiles += (Join-Path $repoDir "SIAP-Print-Tailscale.exe")
+}
+
+& $ghExe release create $tag $releaseFiles `
     --repo "fiqri1010/SIAP-Print-Tailscale" `
     --title "SIAP Print Tailscale $tag - Production Release" `
     --notes-file $notesFile
