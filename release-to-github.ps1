@@ -54,7 +54,7 @@ $releaseNotes = @"
 > **Waktu Rilis:** $dateStr (WIB)  
 > **Platform Target:** Windows 10 / Windows 11 (x64)  
 > **Arsitektur:** 100% C# .NET 8 Standalone (Ultra-Low Memory Edition)  
-> **Commit Hash:** \`$gitHash\`  
+> **Commit Hash:** $gitHash  
 > **Distribusi:** Windows Setup Installer & Portable Standalone Single-File
 
 ---
@@ -62,20 +62,20 @@ $releaseNotes = @"
 ## 🚀 Ringkasan Fitur & Pembaruan Rilis $tag
 
 ### 1. ⚡ Ultra-Low Memory & Refactoring Performa Tinggi (>60% Lebih Hemat RAM)
-- Menggantikan ASP.NET Core Kestrel secara total dengan engine HTTP asynchronous berbasis \`TcpListener\`.
+- Menggantikan ASP.NET Core Kestrel secara total dengan engine HTTP asynchronous berbasis `TcpListener`.
 - Footprint RAM turun drastis ke **~8–14 MB** saat aktif dan **~3–6 MB** saat berada di System Tray (penghematan >60%–80%).
 - Streaming zero-copy Base64 decoding langsung dari UTF-8 buffer JSON tanpa alokasi string raksasa di Large Object Heap (LOH).
-- Manajemen agresif Windows Working Set (\`SetProcessWorkingSetSize\`) segera setelah mencetak dan saat idle.
+- Manajemen agresif Windows Working Set (`SetProcessWorkingSetSize`) segera setelah mencetak dan saat idle.
 
 ### 2. 🛡️ Proteksi Single-Instance Anti-Duplikasi Mutlak
 - Proteksi berlapis ganda melalui Global Kernel Mutex, Local Session Mutex, dan pemindaian proses aktif Windows.
-- Terintegrasi langsung dalam kode: jika pengguna mencoba membuka jendela kedua, aplikasi yang sedang aktif di latar belakang / System Tray otomatis dipulihkan ke layar kerja (\`WM_SHOW_WINDOW\`), dan kotak dialog peringatan native dimunculkan:
+- Terintegrasi langsung dalam kode: jika pengguna mencoba membuka jendela kedua, aplikasi yang sedang aktif di latar belakang / System Tray otomatis dipulihkan ke layar kerja (`WM_SHOW_WINDOW`), dan kotak dialog peringatan native dimunculkan:
   > *"Aplikasi telah terbuka, tidak bisa buka 2 jendela sekaligus."*
 - Menjamin tidak ada 2 proses aplikasi yang berjalan bersamaan di sistem.
 
 ### 3. 🖨️ PDF Engine Mandiri Presisi (Windows.Data.Pdf)
-- Merender dokumen per halaman ke grafis resolusi tinggi 300 DPI via Windows Runtime (\`Windows.Data.Pdf\`).
-- Penyaluran langsung via Windows Print Spooler GDI+ (\`PrintDocument\`) tanpa aplikasi pihak ketiga (SumatraPDF/Acrobat).
+- Merender dokumen per halaman ke grafis resolusi tinggi 300 DPI via Windows Runtime (`Windows.Data.Pdf`).
+- Penyaluran langsung via Windows Print Spooler GDI+ (`PrintDocument`) tanpa aplikasi pihak ketiga (SumatraPDF/Acrobat).
 - **Akurasi Halaman 100%:** Jumlah halaman tercetak persis sesuai dokumen asli dan 100% silent.
 
 ### 4. 📄 Pengaturan Cetak dari SIAP NEO (v2.1+)
@@ -86,8 +86,8 @@ $releaseNotes = @"
 - Dukungan satu-klik integrasi Windows Firewall.
 
 ### 6. 📦 Paket Instalasi Windows Lengkap
-- Menyediakan installer mandiri (\`SIAP-Print-Tailscale-$tag-Setup.exe\`) dengan pembuatan pintasan Desktop dan Start Menu otomatis.
-- Berkas binary telah ditandatangani dengan sertifikat resmi Authenticode (\`CN=Jadwal Priok Developer\`).
+- Menyediakan installer mandiri (`SIAP-Print-Tailscale-$tag-Setup.exe`) dengan pembuatan pintasan Desktop dan Start Menu otomatis.
+- Berkas binary telah ditandatangani dengan sertifikat resmi Authenticode (`CN=Jadwal Priok Developer`).
 
 ---
 
@@ -120,10 +120,17 @@ if ($releaseFiles.Count -eq 0) {
     $releaseFiles += (Join-Path $repoDir "SIAP-Print-Tailscale.exe")
 }
 
-& $ghExe release create $tag $releaseFiles `
-    --repo "fiqri1010/SIAP-Print-Tailscale" `
-    --title "SIAP Print Tailscale $tag - Production Release" `
-    --notes-file $notesFile
+$existingRelease = & $ghExe release view $tag --repo "fiqri1010/SIAP-Print-Tailscale" 2>&1
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "Memperbarui catatan dan berkas rilis $tag di GitHub..." -ForegroundColor Yellow
+    & $ghExe release edit $tag --repo "fiqri1010/SIAP-Print-Tailscale" --notes-file $notesFile
+    & $ghExe release upload $tag $releaseFiles --repo "fiqri1010/SIAP-Print-Tailscale" --clobber
+} else {
+    & $ghExe release create $tag $releaseFiles `
+        --repo "fiqri1010/SIAP-Print-Tailscale" `
+        --title "SIAP Print Tailscale $tag - Production Release" `
+        --notes-file $notesFile
+}
 
 Remove-Item $notesFile -Force -ErrorAction SilentlyContinue
 

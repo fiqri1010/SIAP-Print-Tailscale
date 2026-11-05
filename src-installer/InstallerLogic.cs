@@ -24,8 +24,8 @@ public static class InstallerLogic
         var currentPid = Process.GetCurrentProcess().Id;
         var processes = Process.GetProcesses()
             .Where(p => p.Id != currentPid &&
-                        (p.ProcessName.StartsWith("SIAP-Print-Tailscale", StringComparison.OrdinalIgnoreCase) ||
-                         p.ProcessName.Equals("SIAP-Print-Tailscale", StringComparison.OrdinalIgnoreCase)))
+                        (p.ProcessName.IndexOf("SIAP-Print", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                         p.ProcessName.IndexOf("SIAP_Print", StringComparison.OrdinalIgnoreCase) >= 0))
             .ToList();
 
         foreach (var p in processes)
@@ -34,7 +34,7 @@ public static class InstallerLogic
             {
                 statusCallback?.Invoke($"Menghentikan proses {p.ProcessName} (PID: {p.Id})...");
                 p.Kill();
-                p.WaitForExit(3000);
+                p.WaitForExit(4000);
             }
             catch { }
         }
@@ -43,34 +43,66 @@ public static class InstallerLogic
 
     public static bool ExecuteInstall(Action<string>? statusCallback = null)
     {
+        string logPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "SIAP-Print-Tailscale",
+            "install.log"
+        );
+
+        void Log(string msg)
+        {
+            try { File.AppendAllText(logPath, $"[{DateTime.Now}] {msg}\n"); } catch { }
+            statusCallback?.Invoke(msg);
+        }
+
         try
         {
+            Log("Memulai eksekusi instalasi...");
+
             // 1. Matikan semua instance lama agar tidak ada 2 aplikasi berjalan bersama
-            KillRunningInstances(statusCallback);
+            KillRunningInstances(Log);
 
             // 2. Buat direktori target
-            statusCallback?.Invoke("Menyiapkan folder instalasi...");
+            Log($"Menyiapkan folder instalasi: {TargetDir}");
             if (!Directory.Exists(TargetDir))
             {
                 Directory.CreateDirectory(TargetDir);
             }
 
             // 3. Ekstrak file binary utama dari embedded resource
-            statusCallback?.Invoke("Memasang berkas SIAP-Print-Tailscale.exe...");
+            Log("Memasang berkas SIAP-Print-Tailscale.exe...");
             var assembly = Assembly.GetExecutingAssembly();
-            using (var stream = assembly.GetManifestResourceStream("SIAP-Print-Tailscale.exe"))
+            var resourceNames = assembly.GetManifestResourceNames();
+            Log($"Resource yang tersedia: {string.Join(", ", resourceNames)}");
+
+            string? exeResName = resourceNames.FirstOrDefault(n => n.EndsWith("SIAP-Print-Tailscale.exe", StringComparison.OrdinalIgnoreCase));
+
+            if (!string.IsNullOrEmpty(exeResName))
             {
+                using var stream = assembly.GetManifestResourceStream(exeResName);
                 if (stream != null)
                 {
                     using var fileStream = new FileStream(TargetExe, FileMode.Create, FileAccess.Write);
                     stream.CopyTo(fileStream);
+                    Log($"Berhasil mengekstrak binary ke {TargetExe}");
                 }
+                else
+                {
+                    Log($"ERROR: Resource stream {exeResName} bernilai null!");
+                }
+            }
+            else
+            {
+                Log("ERROR: Resource SIAP-Print-Tailscale.exe tidak ditemukan dalam assembly!");
             }
 
             // Ekstrak app.ico jika ada
             string iconPath = Path.Combine(TargetDir, "app.ico");
-            using (var stream = assembly.GetManifestResourceStream("app.ico"))
+            string? icoResName = resourceNames.FirstOrDefault(n => n.EndsWith("app.ico", StringComparison.OrdinalIgnoreCase));
+
+            if (!string.IsNullOrEmpty(icoResName))
             {
+                using var stream = assembly.GetManifestResourceStream(icoResName);
                 if (stream != null)
                 {
                     using var fileStream = new FileStream(iconPath, FileMode.Create, FileAccess.Write);
@@ -79,11 +111,11 @@ public static class InstallerLogic
             }
 
             // 4. Buat Pintasan Desktop dan Start Menu
-            statusCallback?.Invoke("Membuat pintasan Desktop dan Start Menu...");
+            Log("Membuat pintasan Desktop dan Start Menu...");
             CreateShortcuts(TargetExe, iconPath);
 
             // 5. Daftarkan di HKCU Run (Startup)
-            statusCallback?.Invoke("Mendaftarkan otomatisasi peluncuran Windows...");
+            Log("Mendaftarkan otomatisasi peluncuran Windows...");
             try
             {
                 using var runKey = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
@@ -92,10 +124,13 @@ public static class InstallerLogic
                     runKey.SetValue("SIAP-Print-Tailscale", $"\"{TargetExe}\" --minimized");
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log($"Peringatan startup registry: {ex.Message}");
+            }
 
             // 6. Jalankan aplikasi baru
-            statusCallback?.Invoke("Meluncurkan aplikasi SIAP Print Tailscale...");
+            Log("Meluncurkan aplikasi SIAP Print Tailscale...");
             Process.Start(new ProcessStartInfo
             {
                 FileName = TargetExe,
@@ -103,12 +138,12 @@ public static class InstallerLogic
                 UseShellExecute = true
             });
 
-            statusCallback?.Invoke("Instalasi berhasil selesai!");
+            Log("Instalasi berhasil selesai!");
             return true;
         }
         catch (Exception ex)
         {
-            statusCallback?.Invoke($"Gagal instalasi: {ex.Message}");
+            Log($"FATAL ERROR instalasi: {ex}");
             return false;
         }
     }
