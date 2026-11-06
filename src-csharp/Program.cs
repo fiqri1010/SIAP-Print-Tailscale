@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -11,6 +12,7 @@ static class Program
 {
     private const string GlobalMutexName = @"Global\SIAP-Print-Tailscale-SingleInstance";
     private const string LocalMutexName = @"Local\SIAP_Print_Tailscale_SingleInstance_Mutex";
+    private const string HeadlessMutexName = @"Global\SIAP-Print-Tailscale-Headless";
     private const string WindowTitle = "SIAP Print Tailscale Server — Native C#/.NET";
 
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
@@ -34,7 +36,7 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
-        string crashLog = System.IO.Path.Combine(
+        string crashLog = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "SIAP-Print-Tailscale",
             "crash.log"
@@ -42,7 +44,7 @@ static class Program
 
         try
         {
-            System.IO.File.AppendAllText(crashLog, $"[{DateTime.Now}] Starting Main(args: {string.Join(" ", args)})...\n");
+            File.AppendAllText(crashLog, $"[{DateTime.Now}] Starting Main(args: {string.Join(" ", args)})...\n");
 
             // 1. Tangani opsi --replace / --force-restart
             bool forceReplace = args.Any(a => a.Equals("--replace", StringComparison.OrdinalIgnoreCase) ||
@@ -69,8 +71,38 @@ static class Program
                 Thread.Sleep(500);
             }
 
-            // 2. Proteksi Single Instance Berlapis (Global Mutex, Local Mutex, dan Process Check)
-            using var globalMutex = new Mutex(true, GlobalMutexName, out bool isNewGlobal);
+            // 2. Mode Headless (Background Boot Service sebelum login Windows)
+            bool isHeadless = args.Any(a => a.Equals("--headless", StringComparison.OrdinalIgnoreCase) ||
+                                           a.Equals("--hidden", StringComparison.OrdinalIgnoreCase) ||
+                                           a.Equals("--service", StringComparison.OrdinalIgnoreCase));
+
+            if (isHeadless)
+            {
+                using var headlessMutex = new Mutex(true, HeadlessMutexName, out bool isNewHeadless);
+                if (!isNewHeadless && !forceReplace)
+                {
+                    File.AppendAllText(crashLog, $"[{DateTime.Now}] Headless server already running, exiting.\n");
+                    return;
+                }
+
+                File.AppendAllText(crashLog, $"[{DateTime.Now}] Starting Headless Print Server (Boot Service)...\n");
+                var cfgHeadless = ConfigManager.LoadConfig();
+                var server = new HttpPrintServer();
+                _ = server.StartAsync(cfgHeadless.Port);
+
+                using var cancelEvent = new ManualResetEventSlim(false);
+                AppDomain.CurrentDomain.ProcessExit += (s, e) =>
+                {
+                    _ = server.StopAsync();
+                    cancelEvent.Set();
+                };
+
+                cancelEvent.Wait();
+                return;
+            }
+
+            // 3. Mode GUI Interaktif (Desktop & System Tray)
+            // Menggunakan Local Mutex untuk memastikan hanya ada 1 jendela GUI di sesi pengguna aktif
             using var localMutex = new Mutex(true, LocalMutexName, out bool isNewLocal);
 
             if (!forceReplace)
@@ -82,20 +114,24 @@ static class Program
                     .ToList();
             }
 
-            bool anotherInstanceExists = (!isNewGlobal || !isNewLocal || runningInstances.Count > 0) && !forceReplace;
+            var existingGuiInstance = runningInstances.FirstOrDefault(p =>
+                p.SessionId == current.SessionId &&
+                (p.MainWindowHandle != IntPtr.Zero || !isNewLocal));
 
-            if (anotherInstanceExists)
+            bool duplicateGuiDetected = (!isNewLocal || existingGuiInstance != null) && !forceReplace;
+
+            if (duplicateGuiDetected)
             {
-                System.IO.File.AppendAllText(crashLog, $"[{DateTime.Now}] Another instance detected, restoring existing window.\n");
+                File.AppendAllText(crashLog, $"[{DateTime.Now}] Another GUI instance detected in Session {current.SessionId}, restoring existing window.\n");
 
                 // Broadcast pesan khusus ke seluruh jendela untuk memunculkan aplikasi yang ada di System Tray
                 uint wmShow = RegisterWindowMessage("SIAP_PRINT_TAILSCALE_SHOW_WINDOW");
                 PostMessage(HWND_BROADCAST, wmShow, IntPtr.Zero, IntPtr.Zero);
 
                 IntPtr existingHwnd = FindWindow(null, WindowTitle);
-                if (existingHwnd == IntPtr.Zero && runningInstances.Count > 0)
+                if (existingHwnd == IntPtr.Zero && existingGuiInstance != null)
                 {
-                    existingHwnd = runningInstances[0].MainWindowHandle;
+                    existingHwnd = existingGuiInstance.MainWindowHandle;
                 }
                 if (existingHwnd != IntPtr.Zero)
                 {
@@ -103,12 +139,7 @@ static class Program
                     SetForegroundWindow(existingHwnd);
                 }
 
-                MessageBox.Show(
-                    "Aplikasi telah terbuka, tidak bisa buka 2 jendela sekaligus.",
-                    "Peringatan",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning
-                );
+                // Keluar seketika agar tidak pernah ada 2 jendela aplikasi berjalan bersamaan di layar pengguna
                 return;
             }
 
@@ -121,14 +152,14 @@ static class Program
                 startMinimized = true;
             }
 
-            System.IO.File.AppendAllText(crashLog, $"[{DateTime.Now}] Creating MainForm...\n");
+            File.AppendAllText(crashLog, $"[{DateTime.Now}] Creating MainForm...\n");
             var mainForm = new MainForm(startMinimized);
-            System.IO.File.AppendAllText(crashLog, $"[{DateTime.Now}] Running Application.Run()...\n");
+            File.AppendAllText(crashLog, $"[{DateTime.Now}] Running Application.Run()...\n");
             Application.Run(mainForm);
         }
         catch (Exception ex)
         {
-            System.IO.File.AppendAllText(crashLog, $"[{DateTime.Now}] FATAL CRASH: {ex}\n");
+            File.AppendAllText(crashLog, $"[{DateTime.Now}] FATAL CRASH: {ex}\n");
         }
     }
 }

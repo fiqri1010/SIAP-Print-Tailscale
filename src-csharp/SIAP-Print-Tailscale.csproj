@@ -10,9 +10,9 @@
     <AssemblyName>SIAP-Print-Tailscale</AssemblyName>
     <RootNamespace>SiapPrintServer</RootNamespace>
     
-    <Version>2.2.0</Version>
-    <AssemblyVersion>2.2.0.0</AssemblyVersion>
-    <FileVersion>2.2.0.0</FileVersion>
+    <Version>2.2.1</Version>
+    <AssemblyVersion>2.2.1.0</AssemblyVersion>
+    <FileVersion>2.2.1.0</FileVersion>
     <Title>SIAP Print Tailscale Server</Title>
     <Product>SIAP Print Tailscale</Product>
     <Company>KPPBC TMP A Tanjung Priok</Company>

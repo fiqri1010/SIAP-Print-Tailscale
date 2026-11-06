@@ -28,6 +28,7 @@ public class MainForm : Form
     private Button _btnRefreshPrinters = null!;
     private DataGridView _gridLogs = null!;
     private CheckBox _chkAutoStart = null!;
+    private CheckBox _chkStartBeforeLogin = null!;
     private CheckBox _chkMinStartup = null!;
     private CheckBox _chkMinExit = null!;
     private ToolStripStatusLabel _statusLabel = null!;
@@ -323,17 +324,32 @@ public class MainForm : Form
 
         _chkAutoStart = new CheckBox
         {
-            Text = "Buka Otomatis saat Startup Windows",
+            Text = "Buka Otomatis saat Startup Windows (Login)",
             AutoSize = true,
-            Margin = new Padding(0, 0, 25, 5)
+            Margin = new Padding(0, 0, 20, 5)
         };
-        _chkAutoStart.CheckedChanged += (s, e) => SaveSettings();
+        _chkAutoStart.CheckedChanged += (s, e) =>
+        {
+            _chkStartBeforeLogin.Enabled = _chkAutoStart.Checked;
+            _chkMinStartup.Enabled = _chkAutoStart.Checked;
+            SaveSettings();
+        };
+
+        _chkStartBeforeLogin = new CheckBox
+        {
+            Text = "⚡ Mulai sebelum login / layar kunci Windows (System Boot Task)",
+            AutoSize = true,
+            ForeColor = Color.FromArgb(30, 58, 138), // Blue-900
+            Font = new Font(Font, FontStyle.Bold),
+            Margin = new Padding(0, 0, 20, 5)
+        };
+        _chkStartBeforeLogin.CheckedChanged += (s, e) => SaveSettings();
 
         _chkMinStartup = new CheckBox
         {
             Text = "Minimize ke Tray saat Startup",
             AutoSize = true,
-            Margin = new Padding(0, 0, 25, 5)
+            Margin = new Padding(0, 0, 20, 5)
         };
         _chkMinStartup.CheckedChanged += (s, e) => SaveSettings();
 
@@ -346,6 +362,7 @@ public class MainForm : Form
         _chkMinExit.CheckedChanged += (s, e) => SaveSettings();
 
         flowSettings.Controls.Add(_chkAutoStart);
+        flowSettings.Controls.Add(_chkStartBeforeLogin);
         flowSettings.Controls.Add(_chkMinStartup);
         flowSettings.Controls.Add(_chkMinExit);
         cardSettings.Controls.Add(flowSettings);
@@ -473,8 +490,12 @@ public class MainForm : Form
         var cfg = ConfigManager.LoadConfig();
         _txtPort.Text = cfg.Port.ToString();
         _chkAutoStart.Checked = cfg.AutoStartStartup;
+        _chkStartBeforeLogin.Checked = cfg.StartBeforeLogin;
         _chkMinStartup.Checked = cfg.MinimizeToTrayOnStartup;
         _chkMinExit.Checked = cfg.MinimizeOnExit;
+
+        _chkStartBeforeLogin.Enabled = cfg.AutoStartStartup;
+        _chkMinStartup.Enabled = cfg.AutoStartStartup;
 
         RefreshNetworkInfo();
         RefreshPrintersList();
@@ -485,11 +506,23 @@ public class MainForm : Form
     {
         var cfg = ConfigManager.LoadConfig();
         cfg.AutoStartStartup = _chkAutoStart.Checked;
+        cfg.StartBeforeLogin = _chkStartBeforeLogin.Checked;
         cfg.MinimizeToTrayOnStartup = _chkMinStartup.Checked;
         cfg.MinimizeOnExit = _chkMinExit.Checked;
         ConfigManager.SaveConfig(cfg);
 
-        StartupHelper.ConfigureStartup(cfg.AutoStartStartup, cfg.MinimizeToTrayOnStartup);
+        // 1. Konfigurasi Startup User (shell:startup & HKCU Run)
+        StartupHelper.ConfigureUserStartup(cfg.AutoStartStartup, cfg.MinimizeToTrayOnStartup);
+
+        // 2. Konfigurasi Boot Task Scheduler (sebelum login Windows)
+        if (cfg.AutoStartStartup && cfg.StartBeforeLogin)
+        {
+            StartupHelper.ConfigureBootTask(true);
+        }
+        else
+        {
+            StartupHelper.ConfigureBootTask(false);
+        }
     }
 
     private void RefreshNetworkInfo()
@@ -619,8 +652,16 @@ public class MainForm : Form
 
             if (_server.IsRunning)
             {
-                _lblStatusBadge.Text = "● ONLINE";
-                _lblStatusBadge.BackColor = Color.FromArgb(16, 185, 129);
+                if (_server.IsExternalService)
+                {
+                    _lblStatusBadge.Text = "● BOOT SERVICE";
+                    _lblStatusBadge.BackColor = Color.FromArgb(2, 132, 199); // Sky-600
+                }
+                else
+                {
+                    _lblStatusBadge.Text = "● ONLINE";
+                    _lblStatusBadge.BackColor = Color.FromArgb(16, 185, 129); // Emerald-500
+                }
             }
             else
             {

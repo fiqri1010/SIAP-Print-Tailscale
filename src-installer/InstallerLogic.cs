@@ -57,7 +57,7 @@ public static class InstallerLogic
 
         try
         {
-            Log("Memulai eksekusi instalasi...");
+            Log("Memulai eksekusi instalasi SIAP Print Tailscale...");
 
             // 1. Matikan semua instance lama agar tidak ada 2 aplikasi berjalan bersama
             KillRunningInstances(Log);
@@ -114,22 +114,98 @@ public static class InstallerLogic
             Log("Membuat pintasan Desktop dan Start Menu...");
             CreateShortcuts(TargetExe, iconPath);
 
-            // 5. Daftarkan di HKCU Run (Startup)
-            Log("Mendaftarkan otomatisasi peluncuran Windows...");
+            // 5. Daftarkan di shell:startup dan HKCU Run
+            Log("Mendaftarkan otomatisasi peluncuran Windows saat login...");
             try
             {
+                string startupDir = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+                string startupLnk = Path.Combine(startupDir, "SIAP-Print-Tailscale.lnk");
+                CreateSingleShortcut(startupLnk, TargetExe, iconPath, "--minimized");
+
                 using var runKey = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
                 if (runKey != null)
                 {
                     runKey.SetValue("SIAP-Print-Tailscale", $"\"{TargetExe}\" --minimized");
                 }
+                Log("Pintasan Startup login berhasil dikonfigurasi.");
             }
             catch (Exception ex)
             {
-                Log($"Peringatan startup registry: {ex.Message}");
+                Log($"Peringatan startup user: {ex.Message}");
             }
 
-            // 6. Jalankan aplikasi baru
+            // 6. Daftarkan Scheduled Task AtStartup (Mulai sebelum login Windows)
+            Log("Mendaftarkan Scheduled Task Boot (hidup sebelum login)...");
+            try
+            {
+                string safeExe = TargetExe.Replace("'", "''");
+                string psScript = 
+                    $"$action = New-ScheduledTaskAction -Execute '{safeExe}' -Argument '--headless'; " +
+                    "$trigger = New-ScheduledTaskTrigger -AtStartup; " +
+                    "$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest; " +
+                    "$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 0) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1); " +
+                    "Register-ScheduledTask -TaskName 'SIAP-Print-Tailscale-Boot' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force";
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "powershell.exe",
+                    Arguments = $"-NoProfile -Command \"{psScript}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using var proc = Process.Start(psi);
+                if (proc != null)
+                {
+                    proc.WaitForExit(6000);
+                    if (proc.HasExited)
+                    {
+                        Log($"Hasil registrasi Boot Task (ExitCode: {proc.ExitCode})");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Peringatan Boot Task: {ex.Message}");
+            }
+
+            // 7. Konfigurasi Windows Firewall untuk port 1234
+            Log("Mendaftarkan aturan Windows Firewall...");
+            try
+            {
+                var psiFw = new ProcessStartInfo
+                {
+                    FileName = "netsh.exe",
+                    Arguments = "advfirewall firewall add rule name=\"SIAP Print Server\" dir=in action=allow protocol=TCP localport=1234",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using var procFw = Process.Start(psiFw);
+                procFw?.WaitForExit(5000);
+            }
+            catch { }
+
+            // 8. Tulis/Update config default agar start_before_login = true
+            try
+            {
+                string dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SIAP-Print-Tailscale");
+                if (!Directory.Exists(dataDir)) Directory.CreateDirectory(dataDir);
+                string cfgFile = Path.Combine(dataDir, "config.json");
+                if (File.Exists(cfgFile))
+                {
+                    string json = File.ReadAllText(cfgFile);
+                    json = json.Replace("\"auto_start_startup\": false", "\"auto_start_startup\": true");
+                    json = json.Replace("\"start_before_login\": false", "\"start_before_login\": true");
+                    File.WriteAllText(cfgFile, json);
+                }
+                else
+                {
+                    string initialJson = "{\n  \"port\": 1234,\n  \"selected_printer\": \"\",\n  \"auto_start_startup\": true,\n  \"start_before_login\": true,\n  \"minimize_to_tray_on_startup\": true,\n  \"minimize_on_exit\": true,\n  \"keep_funnel\": true\n}";
+                    File.WriteAllText(cfgFile, initialJson);
+                }
+            }
+            catch { }
+
+            // 9. Jalankan aplikasi baru
             Log("Meluncurkan aplikasi SIAP Print Tailscale...");
             Process.Start(new ProcessStartInfo
             {
@@ -152,30 +228,37 @@ public static class InstallerLogic
     {
         try
         {
-            Type? shellType = Type.GetTypeFromProgID("WScript.Shell");
-            if (shellType == null) return;
-
-            dynamic shell = Activator.CreateInstance(shellType)!;
-
             // Desktop Shortcut
             string desktopDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
             string desktopLnk = Path.Combine(desktopDir, "SIAP Print Tailscale.lnk");
-            dynamic scDesktop = shell.CreateShortcut(desktopLnk);
-            scDesktop.TargetPath = exePath;
-            scDesktop.WorkingDirectory = Path.GetDirectoryName(exePath);
-            scDesktop.Description = "SIAP Print Tailscale Server";
-            scDesktop.IconLocation = File.Exists(iconPath) ? iconPath : $"{exePath},0";
-            scDesktop.Save();
+            CreateSingleShortcut(desktopLnk, exePath, iconPath);
 
             // Start Menu Shortcut
             string startMenuDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs");
             string startMenuLnk = Path.Combine(startMenuDir, "SIAP Print Tailscale.lnk");
-            dynamic scStart = shell.CreateShortcut(startMenuLnk);
-            scStart.TargetPath = exePath;
-            scStart.WorkingDirectory = Path.GetDirectoryName(exePath);
-            scStart.Description = "SIAP Print Tailscale Server";
-            scStart.IconLocation = File.Exists(iconPath) ? iconPath : $"{exePath},0";
-            scStart.Save();
+            CreateSingleShortcut(startMenuLnk, exePath, iconPath);
+        }
+        catch { }
+    }
+
+    public static void CreateSingleShortcut(string lnkPath, string exePath, string iconPath, string arguments = "")
+    {
+        try
+        {
+            Type? shellType = Type.GetTypeFromProgID("WScript.Shell");
+            if (shellType == null) return;
+
+            dynamic shell = Activator.CreateInstance(shellType)!;
+            dynamic sc = shell.CreateShortcut(lnkPath);
+            sc.TargetPath = exePath;
+            sc.WorkingDirectory = Path.GetDirectoryName(exePath);
+            if (!string.IsNullOrEmpty(arguments))
+            {
+                sc.Arguments = arguments;
+            }
+            sc.Description = "SIAP Print Tailscale Server";
+            sc.IconLocation = File.Exists(iconPath) ? iconPath : $"{exePath},0";
+            sc.Save();
         }
         catch { }
     }

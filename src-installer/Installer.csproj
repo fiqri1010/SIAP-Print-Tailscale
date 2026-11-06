@@ -10,13 +10,14 @@
     <AssemblyName>SIAP-Print-Tailscale-Setup</AssemblyName>
     <RootNamespace>SiapPrintInstaller</RootNamespace>
     
-    <Version>2.2.0</Version>
-    <AssemblyVersion>2.2.0.0</AssemblyVersion>
-    <FileVersion>2.2.0.0</FileVersion>
+    <Version>2.2.1</Version>
+    <AssemblyVersion>2.2.1.0</AssemblyVersion>
+    <FileVersion>2.2.1.0</FileVersion>
     <Title>SIAP Print Tailscale Setup</Title>
     <Product>SIAP Print Tailscale</Product>
     <Company>KPPBC TMP A Tanjung Priok</Company>
     <Description>Installer Mandiri SIAP Print Tailscale untuk Windows</Description>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>

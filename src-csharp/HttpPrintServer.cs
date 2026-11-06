@@ -22,6 +22,7 @@ public class HttpPrintServer
     private readonly Stopwatch _uptime = new();
 
     public bool IsRunning { get; private set; }
+    public bool IsExternalService { get; private set; }
     public int ActivePort { get; private set; } = 1234;
 
     public event Action<string>? ServerStatusChanged;
@@ -51,6 +52,7 @@ public class HttpPrintServer
 
             _uptime.Restart();
             IsRunning = true;
+            IsExternalService = false;
             ServerStatusChanged?.Invoke($"Berjalan pada port {port}");
 
             File.AppendAllText(logPath, $"[{DateTime.Now}] Server berjalan sukses pada 0.0.0.0:{port}\n");
@@ -59,10 +61,39 @@ public class HttpPrintServer
         }
         catch (Exception ex)
         {
+            // Cek apakah server kita sendiri yang sedang berjalan (mis. Boot Task di background)
+            bool isSelfActive = await CheckIfSelfServiceActiveAsync(port);
+            if (isSelfActive)
+            {
+                IsRunning = true;
+                IsExternalService = true;
+                ActivePort = port;
+                ServerStatusChanged?.Invoke($"Berjalan via Background Boot Service (Port {port})");
+                File.AppendAllText(logPath, $"[{DateTime.Now}] Server sudah aktif di latar belakang (Boot Service) pada port {port}.\n");
+                return;
+            }
+
             IsRunning = false;
+            IsExternalService = false;
             ServerStatusChanged?.Invoke($"Terhenti: {ex.Message}");
             File.AppendAllText(logPath, $"[{DateTime.Now}] ERROR memulai server: {ex}\n");
         }
+    }
+
+    public static async Task<bool> CheckIfSelfServiceActiveAsync(int port)
+    {
+        try
+        {
+            using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(1) };
+            var response = await client.GetAsync($"http://127.0.0.1:{port}/ping");
+            if (response.IsSuccessStatusCode)
+            {
+                string text = await response.Content.ReadAsStringAsync();
+                return text.Contains("SIAP Print Server");
+            }
+        }
+        catch { }
+        return false;
     }
 
     private async Task AcceptConnectionsAsync(CancellationToken ct, string logPath)
