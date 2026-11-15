@@ -82,9 +82,31 @@ public static class InstallerLogic
                 using var stream = assembly.GetManifestResourceStream(exeResName);
                 if (stream != null)
                 {
+                    // Jika file target sedang berjalan/dikunci oleh proses lain (mis. Session 0), rename ke .old
+                    if (File.Exists(TargetExe))
+                    {
+                        string oldExe = TargetExe + ".old";
+                        if (File.Exists(oldExe))
+                        {
+                            try { File.Delete(oldExe); } catch { }
+                        }
+                        try
+                        {
+                            File.Move(TargetExe, oldExe, true);
+                        }
+                        catch { }
+                    }
+
                     using var fileStream = new FileStream(TargetExe, FileMode.Create, FileAccess.Write);
                     stream.CopyTo(fileStream);
                     Log($"Berhasil mengekstrak binary ke {TargetExe}");
+
+                    // Bersihkan berkas .old bila sudah tidak terkunci
+                    string cleanupOld = TargetExe + ".old";
+                    if (File.Exists(cleanupOld))
+                    {
+                        try { File.Delete(cleanupOld); } catch { }
+                    }
                 }
                 else
                 {

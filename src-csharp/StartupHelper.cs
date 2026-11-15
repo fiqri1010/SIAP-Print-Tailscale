@@ -41,6 +41,18 @@ public static class StartupHelper
     {
         try
         {
+            bool isInstalled = IsBootTaskInstalled();
+            if (enable && isInstalled)
+            {
+                // Task sudah terpasang, jangan pernah memunculkan dialog UAC lagi
+                return true;
+            }
+            if (!enable && !isInstalled)
+            {
+                // Task sudah tidak ada, tidak perlu memunculkan dialog UAC
+                return true;
+            }
+
             string exePath = customExePath 
                 ?? Process.GetCurrentProcess().MainModule?.FileName 
                 ?? Path.Combine(AppContext.BaseDirectory, "SIAP-Print-Tailscale.exe");

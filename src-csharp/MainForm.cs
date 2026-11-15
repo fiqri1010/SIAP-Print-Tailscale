@@ -34,6 +34,7 @@ public class MainForm : Form
     private ToolStripStatusLabel _statusLabel = null!;
     private ToolStripStatusLabel _ramLabel = null!;
     private int _diagTickCount = 0;
+    private bool _isLoadingConfig = false;
 
     private bool _reallyExit = false;
 
@@ -328,8 +329,9 @@ public class MainForm : Form
             AutoSize = true,
             Margin = new Padding(0, 0, 20, 5)
         };
-        _chkAutoStart.CheckedChanged += (s, e) =>
+        _chkAutoStart.Click += (s, e) =>
         {
+            if (_isLoadingConfig) return;
             _chkStartBeforeLogin.Enabled = _chkAutoStart.Checked;
             _chkMinStartup.Enabled = _chkAutoStart.Checked;
             SaveSettings();
@@ -343,7 +345,29 @@ public class MainForm : Form
             Font = new Font(Font, FontStyle.Bold),
             Margin = new Padding(0, 0, 20, 5)
         };
-        _chkStartBeforeLogin.CheckedChanged += (s, e) => SaveSettings();
+        _chkStartBeforeLogin.Click += (s, e) =>
+        {
+            if (_isLoadingConfig) return;
+
+            if (_chkStartBeforeLogin.Checked)
+            {
+                var answer = MessageBox.Show(this,
+                    "Fitur 'Mulai sebelum login' akan mendaftarkan Task Scheduler agar server langsung aktif saat PC menyala.\n\nOperasi ini memerlukan persetujuan Administrator (UAC). Lanjutkan?",
+                    "Konfirmasi Hak Administrator",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+
+                if (answer != DialogResult.Yes)
+                {
+                    _isLoadingConfig = true;
+                    _chkStartBeforeLogin.Checked = false;
+                    _isLoadingConfig = false;
+                    return;
+                }
+            }
+
+            SaveSettings();
+        };
 
         _chkMinStartup = new CheckBox
         {
@@ -351,7 +375,11 @@ public class MainForm : Form
             AutoSize = true,
             Margin = new Padding(0, 0, 20, 5)
         };
-        _chkMinStartup.CheckedChanged += (s, e) => SaveSettings();
+        _chkMinStartup.Click += (s, e) =>
+        {
+            if (_isLoadingConfig) return;
+            SaveSettings();
+        };
 
         _chkMinExit = new CheckBox
         {
@@ -359,7 +387,11 @@ public class MainForm : Form
             AutoSize = true,
             Margin = new Padding(0, 0, 10, 5)
         };
-        _chkMinExit.CheckedChanged += (s, e) => SaveSettings();
+        _chkMinExit.Click += (s, e) =>
+        {
+            if (_isLoadingConfig) return;
+            SaveSettings();
+        };
 
         flowSettings.Controls.Add(_chkAutoStart);
         flowSettings.Controls.Add(_chkStartBeforeLogin);
@@ -487,23 +519,33 @@ public class MainForm : Form
 
     private void LoadConfigAndData()
     {
-        var cfg = ConfigManager.LoadConfig();
-        _txtPort.Text = cfg.Port.ToString();
-        _chkAutoStart.Checked = cfg.AutoStartStartup;
-        _chkStartBeforeLogin.Checked = cfg.StartBeforeLogin;
-        _chkMinStartup.Checked = cfg.MinimizeToTrayOnStartup;
-        _chkMinExit.Checked = cfg.MinimizeOnExit;
+        _isLoadingConfig = true;
+        try
+        {
+            var cfg = ConfigManager.LoadConfig();
+            _txtPort.Text = cfg.Port.ToString();
+            _chkAutoStart.Checked = cfg.AutoStartStartup;
+            _chkStartBeforeLogin.Checked = cfg.StartBeforeLogin;
+            _chkMinStartup.Checked = cfg.MinimizeToTrayOnStartup;
+            _chkMinExit.Checked = cfg.MinimizeOnExit;
 
-        _chkStartBeforeLogin.Enabled = cfg.AutoStartStartup;
-        _chkMinStartup.Enabled = cfg.AutoStartStartup;
+            _chkStartBeforeLogin.Enabled = cfg.AutoStartStartup;
+            _chkMinStartup.Enabled = cfg.AutoStartStartup;
 
-        RefreshNetworkInfo();
-        RefreshPrintersList();
-        LoadLogsData();
+            RefreshNetworkInfo();
+            RefreshPrintersList();
+            LoadLogsData();
+        }
+        finally
+        {
+            _isLoadingConfig = false;
+        }
     }
 
     private void SaveSettings()
     {
+        if (_isLoadingConfig) return;
+
         var cfg = ConfigManager.LoadConfig();
         cfg.AutoStartStartup = _chkAutoStart.Checked;
         cfg.StartBeforeLogin = _chkStartBeforeLogin.Checked;
@@ -511,15 +553,18 @@ public class MainForm : Form
         cfg.MinimizeOnExit = _chkMinExit.Checked;
         ConfigManager.SaveConfig(cfg);
 
-        // 1. Konfigurasi Startup User (shell:startup & HKCU Run)
+        // 1. Konfigurasi Startup User (shell:startup & HKCU Run) - Tidak memerlukan UAC
         StartupHelper.ConfigureUserStartup(cfg.AutoStartStartup, cfg.MinimizeToTrayOnStartup);
 
-        // 2. Konfigurasi Boot Task Scheduler (sebelum login Windows)
-        if (cfg.AutoStartStartup && cfg.StartBeforeLogin)
+        // 2. Konfigurasi Boot Task Scheduler (sebelum login Windows) - Hanya bila status berubah!
+        bool shouldInstall = cfg.AutoStartStartup && cfg.StartBeforeLogin;
+        bool isInstalled = StartupHelper.IsBootTaskInstalled();
+
+        if (shouldInstall && !isInstalled)
         {
             StartupHelper.ConfigureBootTask(true);
         }
-        else
+        else if (!shouldInstall && isInstalled)
         {
             StartupHelper.ConfigureBootTask(false);
         }
