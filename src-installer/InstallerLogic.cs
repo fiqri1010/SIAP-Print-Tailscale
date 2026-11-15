@@ -85,16 +85,19 @@ public static class InstallerLogic
                     // Jika file target sedang berjalan/dikunci oleh proses lain (mis. Session 0), rename ke .old
                     if (File.Exists(TargetExe))
                     {
-                        string oldExe = TargetExe + ".old";
-                        if (File.Exists(oldExe))
-                        {
-                            try { File.Delete(oldExe); } catch { }
-                        }
                         try
                         {
-                            File.Move(TargetExe, oldExe, true);
+                            File.Delete(TargetExe);
                         }
-                        catch { }
+                        catch
+                        {
+                            string oldExe = $"{TargetExe}.old.{Guid.NewGuid():N[..6]}";
+                            try
+                            {
+                                File.Move(TargetExe, oldExe, true);
+                            }
+                            catch { }
+                        }
                     }
 
                     using var fileStream = new FileStream(TargetExe, FileMode.Create, FileAccess.Write);
@@ -102,11 +105,15 @@ public static class InstallerLogic
                     Log($"Berhasil mengekstrak binary ke {TargetExe}");
 
                     // Bersihkan berkas .old bila sudah tidak terkunci
-                    string cleanupOld = TargetExe + ".old";
-                    if (File.Exists(cleanupOld))
+                    try
                     {
-                        try { File.Delete(cleanupOld); } catch { }
+                        var dir = new DirectoryInfo(TargetDir);
+                        foreach (var f in dir.GetFiles("*.old*"))
+                        {
+                            try { f.Delete(); } catch { }
+                        }
                     }
+                    catch { }
                 }
                 else
                 {

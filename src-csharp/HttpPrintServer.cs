@@ -349,9 +349,20 @@ public class HttpPrintServer
                     return;
                 }
 
-                // 4. Routing Endpoint POST /print-pdf
+                // 4. Routing Endpoint POST
                 if (method == "POST")
                 {
+                    if (path == "/shutdown" || path == "/restart")
+                    {
+                        await SendResponseAsync(stream, 200, "OK", "application/json; charset=utf-8", "{\"success\":true,\"message\":\"Server sedang dihentikan / dimuat ulang...\"}");
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(500);
+                            Environment.Exit(0);
+                        });
+                        return;
+                    }
+
                     if (path != "/print-pdf")
                     {
                         await SendResponseAsync(stream, 404, "Not Found", "text/plain", "Endpoint tidak ditemukan");
