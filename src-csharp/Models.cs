@@ -33,8 +33,11 @@ public class PrintLogItem
     [JsonPropertyName("id")]
     public long Id { get; set; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
+    [JsonPropertyName("job_id")]
+    public string JobId { get; set; } = "";
+
     [JsonPropertyName("time")]
-    public string Time { get; set; } = DateTime.Now.ToString("HH:mm:ss");
+    public string Time { get; set; } = DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss");
 
     [JsonPropertyName("filename")]
     public string Filename { get; set; } = "";
@@ -50,6 +53,31 @@ public class PrintLogItem
 
     [JsonPropertyName("message")]
     public string Message { get; set; } = "";
+
+    /// <summary>
+    /// Mengembalikan format waktu lengkap tanggal dan jam.
+    /// Jika data log lama hanya menyimpan jam (HH:mm:ss), fungsi ini mengonversi Id (timestamp unix) menjadi tanggal lengkap.
+    /// </summary>
+    [JsonIgnore]
+    public string DisplayTime
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(Time) && Time.Length > 8)
+            {
+                return Time;
+            }
+            if (Id > 0)
+            {
+                try
+                {
+                    return DateTimeOffset.FromUnixTimeMilliseconds(Id).ToLocalTime().ToString("dd/MM/yyyy HH:mm:ss");
+                }
+                catch { }
+            }
+            return Time;
+        }
+    }
 }
 
 public class PrinterInfo
@@ -62,6 +90,48 @@ public class PrinterInfo
 
     [JsonPropertyName("port")]
     public string Port { get; set; } = "";
+
+    [JsonPropertyName("is_default")]
+    public bool IsDefault { get; set; } = false;
+
+    /// <summary>
+    /// Status operasional printer: "idle" (siap), "aktif" (sedang mencetak/antrean), "offline" (tidak terhubung), "error" (kendala/kertas macet).
+    /// </summary>
+    [JsonPropertyName("status")]
+    public string Status { get; set; } = "idle";
+
+    [JsonPropertyName("status_description")]
+    public string StatusDescription { get; set; } = "Siap mencetak";
+
+    [JsonPropertyName("is_offline")]
+    public bool IsOffline { get; set; } = false;
+
+    [JsonPropertyName("job_count")]
+    public int JobCount { get; set; } = 0;
+}
+
+public class PrinterStatusDto
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+
+    [JsonPropertyName("status")]
+    public string Status { get; set; } = "idle"; // "idle" | "aktif" | "offline" | "error"
+
+    [JsonPropertyName("status_description")]
+    public string StatusDescription { get; set; } = "Siap mencetak";
+
+    [JsonPropertyName("is_offline")]
+    public bool IsOffline { get; set; } = false;
+
+    [JsonPropertyName("job_count")]
+    public int JobCount { get; set; } = 0;
+
+    [JsonPropertyName("port")]
+    public string Port { get; set; } = "";
+
+    [JsonPropertyName("driver")]
+    public string Driver { get; set; } = "";
 
     [JsonPropertyName("is_default")]
     public bool IsDefault { get; set; } = false;
@@ -111,6 +181,15 @@ public class PrintResponseDto
     [JsonPropertyName("success")]
     public bool Success { get; set; }
 
+    [JsonPropertyName("job_id")]
+    public string JobId { get; set; } = "";
+
+    /// <summary>
+    /// Status pemrosesan cetak: "printed" (selesai ke printer fisik), "spooling" (antrean spooler), "printing", atau "failed".
+    /// </summary>
+    [JsonPropertyName("status")]
+    public string Status { get; set; } = "printed";
+
     [JsonPropertyName("printer")]
     public string Printer { get; set; } = "";
 
@@ -119,6 +198,39 @@ public class PrintResponseDto
 
     [JsonPropertyName("pages")]
     public int Pages { get; set; }
+
+    [JsonPropertyName("error")]
+    public string? Error { get; set; }
+}
+
+public class PrintJobStatusDto
+{
+    [JsonPropertyName("job_id")]
+    public string JobId { get; set; } = "";
+
+    [JsonPropertyName("filename")]
+    public string Filename { get; set; } = "";
+
+    [JsonPropertyName("printer")]
+    public string Printer { get; set; } = "";
+
+    [JsonPropertyName("pages")]
+    public int Pages { get; set; } = 1;
+
+    /// <summary>
+    /// Status akhir cetakan: "pending", "spooling", "printing", "printed", "failed".
+    /// </summary>
+    [JsonPropertyName("status")]
+    public string Status { get; set; } = "printed";
+
+    [JsonPropertyName("is_completed")]
+    public bool IsCompleted { get; set; } = true;
+
+    [JsonPropertyName("time")]
+    public string Time { get; set; } = "";
+
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = "";
 
     [JsonPropertyName("error")]
     public string? Error { get; set; }
@@ -154,7 +266,7 @@ public class ServerInfoResponseDto
     [JsonPropertyName("version")]
     public string Version { get; set; } = "";
 
-    /// <summary>Fitur cetak yang didukung: "paperSize", "margins", "pages".</summary>
+    /// <summary>Fitur cetak yang didukung: "paperSize", "margins", "pages", "printerStatus", "jobTracking".</summary>
     [JsonPropertyName("features")]
     public string[] Features { get; set; } = Array.Empty<string>();
 }

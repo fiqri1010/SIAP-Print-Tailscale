@@ -100,23 +100,32 @@ public static class NativePdfPrinter
         catch { }
     }
 
-    public static async Task<(bool Success, string Message, int PagesPrinted, string FinalPrinter)> PrintAsync(
+    public static async Task<(bool Success, string Message, int PagesPrinted, string FinalPrinter, string JobId, string Status)> PrintAsync(
         byte[] pdfBytes,
         string? requestedPrinter,
         string docTitle,
-        PrintOptions? options = null)
+        PrintOptions? options = null,
+        string? requestedJobId = null)
     {
         options ??= PrintOptions.Default;
+        string jobId = string.IsNullOrWhiteSpace(requestedJobId)
+            ? $"job_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid():N[..6]}"
+            : requestedJobId;
+
         if (pdfBytes == null || pdfBytes.Length == 0)
         {
-            return (false, "Data berkas PDF kosong (0 byte)", 0, "");
+            PrintJobTracker.RegisterJob(jobId, docTitle, requestedPrinter ?? "", 0);
+            PrintJobTracker.UpdateJob(jobId, "failed", "Data berkas PDF kosong (0 byte)", true, "Data berkas PDF kosong (0 byte)");
+            return (false, "Data berkas PDF kosong (0 byte)", 0, "", jobId, "failed");
         }
 
         // Validasi header PDF (%PDF-)
         if (pdfBytes.Length < 5 ||
             pdfBytes[0] != 0x25 || pdfBytes[1] != 0x50 || pdfBytes[2] != 0x44 || pdfBytes[3] != 0x46)
         {
-            return (false, "Format berkas tidak valid: bukan berkas PDF yang sah", 0, "");
+            PrintJobTracker.RegisterJob(jobId, docTitle, requestedPrinter ?? "", 0);
+            PrintJobTracker.UpdateJob(jobId, "failed", "Format berkas tidak valid: bukan berkas PDF yang sah", true, "Format berkas tidak valid");
+            return (false, "Format berkas tidak valid: bukan berkas PDF yang sah", 0, "", jobId, "failed");
         }
 
         await PrintLock.WaitAsync();
@@ -134,20 +143,36 @@ public static class NativePdfPrinter
             int totalPages = (int)pdfDoc.PageCount;
             if (totalPages <= 0)
             {
-                return (false, "Berkas PDF tidak memiliki halaman yang dapat dicetak", 0, "");
+                PrintJobTracker.RegisterJob(jobId, docTitle, requestedPrinter ?? "", 0);
+                PrintJobTracker.UpdateJob(jobId, "failed", "Berkas PDF tidak memiliki halaman yang dapat dicetak", true, "No pages");
+                return (false, "Berkas PDF tidak memiliki halaman yang dapat dicetak", 0, "", jobId, "failed");
             }
 
             // 2. Tentukan printer tujuan
             string finalPrinter = ResolvePrinter(requestedPrinter);
             if (string.IsNullOrWhiteSpace(finalPrinter))
             {
-                return (false, "Tidak ada printer aktif yang terdeteksi di sistem Windows", 0, "");
+                PrintJobTracker.RegisterJob(jobId, docTitle, requestedPrinter ?? "", totalPages);
+                PrintJobTracker.UpdateJob(jobId, "failed", "Tidak ada printer aktif yang terdeteksi di sistem Windows", true, "No active printer");
+                return (false, "Tidak ada printer aktif yang terdeteksi di sistem Windows", 0, "", jobId, "failed");
             }
+
+            // Pre-check status printer: Jangan kirim bila printer offline atau error fisik
+            var (pStatus, pDesc, isOffline, _, _, _) = WindowsPrinterHelper.GetPrinterDetailedStatus(finalPrinter);
+            if (isOffline || pStatus == "error")
+            {
+                PrintJobTracker.RegisterJob(jobId, docTitle, finalPrinter, totalPages);
+                PrintJobTracker.UpdateJob(jobId, "failed", $"Printer '{finalPrinter}' tidak siap: {pDesc}", true, pDesc);
+                return (false, $"Printer '{finalPrinter}' tidak siap: {pDesc}", 0, finalPrinter, jobId, "failed");
+            }
+
+            // Daftarkan print job ke tracker
+            PrintJobTracker.RegisterJob(jobId, docTitle, finalPrinter, totalPages);
 
             // 3. Siapkan PrintDocument GDI+
             using var printDoc = new PrintDocument();
             printDoc.PrinterSettings.PrinterName = finalPrinter;
-            printDoc.DocumentName = string.IsNullOrWhiteSpace(docTitle) ? "SIAP_Document.pdf" : docTitle;
+            printDoc.DocumentName = $"{docTitle} [{jobId}]";
 
             // Gunakan StandardPrintController agar cetak berjalan 100% silent tanpa pop-up dialog
             printDoc.PrintController = new StandardPrintController();
@@ -273,15 +298,20 @@ public static class NativePdfPrinter
 
             if (pageException != null)
             {
-                return (false, $"Kesalahan saat mencetak: {pageException.Message}", listPos, finalPrinter);
+                PrintJobTracker.UpdateJob(jobId, "failed", $"Kesalahan saat mencetak: {pageException.Message}", true, pageException.Message);
+                return (false, $"Kesalahan saat mencetak: {pageException.Message}", listPos, finalPrinter, jobId, "failed");
             }
 
+            // Mulai pantau status pelepasan antrean spooler ke hardware printer secara async
+            PrintJobTracker.StartSpoolerMonitoring(jobId, finalPrinter, pageList.Count);
+
             string paperInfo = paper != null ? $", kertas {paper.PaperName}" : "";
-            return (true, $"Dicetak via Native Windows PDF Engine ({pageList.Count} dari {totalPages} halaman{paperInfo})", pageList.Count, finalPrinter);
+            return (true, $"Dicetak via Native Windows PDF Engine ({pageList.Count} dari {totalPages} halaman{paperInfo})", pageList.Count, finalPrinter, jobId, "printed");
         }
         catch (Exception ex)
         {
-            return (false, $"Gagal mencetak PDF: {ex.Message}", 0, requestedPrinter ?? "");
+            PrintJobTracker.UpdateJob(jobId, "failed", $"Gagal mencetak PDF: {ex.Message}", true, ex.Message);
+            return (false, $"Gagal mencetak PDF: {ex.Message}", 0, requestedPrinter ?? "", jobId, "failed");
         }
         finally
         {

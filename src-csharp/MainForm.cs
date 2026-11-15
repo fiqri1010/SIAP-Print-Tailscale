@@ -24,6 +24,7 @@ public class MainForm : Form
     private TextBox _txtTailscaleIp = null!;
     private TextBox _txtFunnelUrl = null!;
     private ComboBox _cmbPrinters = null!;
+    private Label _lblPrinterStatus = null!;
     private Button _btnSavePrinter = null!;
     private Button _btnRefreshPrinters = null!;
     private DataGridView _gridLogs = null!;
@@ -268,9 +269,9 @@ public class MainForm : Form
             lblFunnel, _txtFunnelUrl, btnCopyFunnel
         });
 
-        // CARD 2: Pemilihan Printer SIAP NEO (Tinggi 80px)
-        var cardPrinter = CreateCard("PRINTER AKTIF (SIAP NEO)", currentY, 80, panelContent);
-        currentY += 95;
+        // CARD 2: Pemilihan Printer SIAP NEO (Tinggi 105px)
+        var cardPrinter = CreateCard("PRINTER AKTIF (SIAP NEO)", currentY, 105, panelContent);
+        currentY += 120;
 
         var lblPrn = new Label { Text = "Pilih Printer:", Location = new Point(15, 34), Width = 100, AutoSize = false };
         _cmbPrinters = new ComboBox { 
@@ -279,6 +280,8 @@ public class MainForm : Form
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, 
             DropDownStyle = ComboBoxStyle.DropDownList 
         };
+        _cmbPrinters.SelectedIndexChanged += (s, e) => UpdateSelectedPrinterStatus();
+
         _btnSavePrinter = new Button { 
             Text = "Simpan Default", 
             Location = new Point(cardPrinter.ClientSize.Width - 245, 29), 
@@ -294,6 +297,7 @@ public class MainForm : Form
                 var cfg = ConfigManager.LoadConfig();
                 cfg.SelectedPrinter = sel;
                 ConfigManager.SaveConfig(cfg);
+                UpdateSelectedPrinterStatus();
                 MessageBox.Show(this, $"Printer default berhasil disimpan: {sel}", "Informasi", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         };
@@ -307,7 +311,18 @@ public class MainForm : Form
         };
         _btnRefreshPrinters.Click += (s, e) => RefreshPrintersList();
 
-        cardPrinter.Controls.AddRange(new Control[] { lblPrn, _cmbPrinters, _btnSavePrinter, _btnRefreshPrinters });
+        _lblPrinterStatus = new Label
+        {
+            Location = new Point(120, 68),
+            Width = cardPrinter.ClientSize.Width - 140,
+            Height = 24,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+            ForeColor = Color.FromArgb(71, 85, 105),
+            Font = new Font("Segoe UI", 8.5F, FontStyle.Regular),
+            Text = "Status: Memeriksa printer..."
+        };
+
+        cardPrinter.Controls.AddRange(new Control[] { lblPrn, _cmbPrinters, _btnSavePrinter, _btnRefreshPrinters, _lblPrinterStatus });
 
         // CARD 3: Pengaturan Startup & Tray (Tinggi 85px)
         var cardSettings = CreateCard("PENGATURAN APLIKASI", currentY, 85, panelContent);
@@ -442,18 +457,18 @@ public class MainForm : Form
             AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
         };
 
-        _gridLogs.Columns.Add("Time", "Waktu");
+        _gridLogs.Columns.Add("Time", "Waktu Cetak");
         _gridLogs.Columns.Add("Filename", "Dokumen");
         _gridLogs.Columns.Add("Pages", "Hal");
         _gridLogs.Columns.Add("Printer", "Printer");
         _gridLogs.Columns.Add("Status", "Status");
         _gridLogs.Columns.Add("Message", "Pesan");
 
-        _gridLogs.Columns["Time"].Width = 75;
-        _gridLogs.Columns["Filename"].Width = 180;
+        _gridLogs.Columns["Time"].Width = 140;
+        _gridLogs.Columns["Filename"].Width = 170;
         _gridLogs.Columns["Pages"].Width = 45;
-        _gridLogs.Columns["Printer"].Width = 150;
-        _gridLogs.Columns["Status"].Width = 80;
+        _gridLogs.Columns["Printer"].Width = 145;
+        _gridLogs.Columns["Status"].Width = 75;
 
         cardLogs.Controls.Add(_gridLogs);
 
@@ -624,6 +639,50 @@ public class MainForm : Form
         {
             _cmbPrinters.SelectedIndex = 0;
         }
+
+        UpdateSelectedPrinterStatus();
+    }
+
+    private void UpdateSelectedPrinterStatus()
+    {
+        if (_cmbPrinters == null || _cmbPrinters.SelectedItem == null) return;
+        string printerName = _cmbPrinters.SelectedItem.ToString() ?? "";
+        if (string.IsNullOrWhiteSpace(printerName)) return;
+
+        Task.Run(() =>
+        {
+            var (status, desc, isOffline, jobCount, port, driver) = WindowsPrinterHelper.GetPrinterDetailedStatus(printerName);
+            try
+            {
+                if (!IsDisposed && IsHandleCreated)
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        if (isOffline)
+                        {
+                            _lblPrinterStatus.Text = $"Status: 🔴 Offline - {desc}";
+                            _lblPrinterStatus.ForeColor = Color.Crimson;
+                        }
+                        else if (status == "error")
+                        {
+                            _lblPrinterStatus.Text = $"Status: ⚠️ Error - {desc}";
+                            _lblPrinterStatus.ForeColor = Color.DarkOrange;
+                        }
+                        else if (status == "aktif")
+                        {
+                            _lblPrinterStatus.Text = $"Status: 🔵 Aktif - {desc}";
+                            _lblPrinterStatus.ForeColor = Color.DodgerBlue;
+                        }
+                        else
+                        {
+                            _lblPrinterStatus.Text = $"Status: 🟢 Siap (Idle) - {desc}";
+                            _lblPrinterStatus.ForeColor = Color.ForestGreen;
+                        }
+                    }));
+                }
+            }
+            catch { }
+        });
     }
 
     private void LoadLogsData()
@@ -662,7 +721,7 @@ public class MainForm : Form
             row = _gridLogs.Rows[rowIdx];
         }
 
-        row.Cells["Time"].Value = item.Time;
+        row.Cells["Time"].Value = item.DisplayTime;
         row.Cells["Filename"].Value = item.Filename;
         row.Cells["Pages"].Value = $"{item.Pages} hal";
         row.Cells["Printer"].Value = item.Printer;
@@ -689,6 +748,11 @@ public class MainForm : Form
             if ((!Visible || WindowState == FormWindowState.Minimized) && _diagTickCount % 5 == 0)
             {
                 MemoryHelper.TrimWorkingSet();
+            }
+
+            if (Visible && WindowState != FormWindowState.Minimized && _diagTickCount % 3 == 0)
+            {
+                UpdateSelectedPrinterStatus();
             }
 
             using var proc = Process.GetCurrentProcess();

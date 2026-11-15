@@ -2,12 +2,15 @@
 
 **SIAP Print Tailscale** adalah aplikasi desktop Windows mandiri berbasis **C# dan .NET 8 Native** dengan antarmuka ringkas. Aplikasi ini menjadi jembatan cetak dokumen resmi (PIB, Dokap, dan Berita Acara Pemeriksaan / BAP) dari aplikasi **SIAP NEO** (KPU Bea Cukai Tanjung Priok) ke printer kantor (mis. Kyocera TASKalfa MZ3200i). Jalur koneksi yang didukung: **Tailscale Funnel**, **IP Tailscale**, atau **Wi-Fi kantor (LAN)**.
 
-Versi saat ini: **v2.2.2 (Native C# / .NET 8 Ultra-Low Memory & Silent Auto-Start Edition)**
+Versi saat ini: **v2.3.0 (Native C# / .NET 8 Real-Time Printer Status & Job Tracking Edition)**
 
 ---
 
 ## Fitur Utama
 
+- 📅 **Riwayat Cetakan Lengkap dengan Tanggal & Waktu**: Tabel riwayat pencetakan kini menampilkan tanggal lengkap (`dd/MM/yyyy HH:mm:ss`) serta secara cerdas mengonversi log lama agar tetap terbaca rapi.
+- 🔍 **Deteksi Status Printer Real-Time (Idle, Aktif, Offline, Error)**: Terhubung ke Win32 Spooler API (`winspool.drv`) dan deteksi konektivitas TCP port 9100 printer LAN. Status printer ditampilkan di dashboard dan dapat diakses oleh SIAP NEO via `GET /printer-status` dan `GET /printers`.
+- 🎯 **Deteksi Tuntas Cetak Fisik (Physical Print Completion Tracking)**: Pemantauan otomatis di latar belakang untuk memastikan dokumen telah selesai disalurkan dan diterima oleh hardware printer fisik via `GET /job-status?job_id=...`.
 - ⚡ **Hidup Otomatis Saat Startup Sebelum Login Windows (Boot Task)**: Server dapat langsung aktif melayani pencetakan dokumen segera setelah komputer dinyalakan melalui integrasi native **Windows Task Scheduler (Task: `SIAP-Print-Tailscale-Boot`)** dengan akun `SYSTEM`. Petugas di lapangan dapat langsung mencetak dari HP tanpa harus menunggu seseorang login ke layar desktop Windows.
 - ⚡ **Native C# / .NET 8 Standalone (Ultra-Low Memory)**: Beroperasi tanpa dependensi Node.js, V8 engine, maupun runtime eksternal. Konsumsi memori sangat minim (hanya **~8–14 MB RAM**, **~3–6 MB saat di System Tray**, dan **<5 MB dalam mode Headless Boot**) berkat engine HTTP asynchronous berbasis `TcpListener` dan optimasi Windows Working Set.
 - 🛡️ **Proteksi Single-Instance Anti-Duplikasi Mutlak**: Terintegrasi langsung pada kode kernel level. Mencegah duplikasi 2 aplikasi berjalan bersamaan di sistem. Jika instance kedua dijalankan, instance aktif di System Tray otomatis dipulihkan ke depan layar (`WM_SHOW_WINDOW`) dan proses kedua langsung keluar.
@@ -45,8 +48,8 @@ Pilih mode **Otomatis** agar SIAP NEO mencoba Funnel → IP Tailscale → IP LAN
 
 Seluruh berkas binary telah ditandatangani secara digital dengan sertifikat resmi Authenticode (`CN=Jadwal Priok Developer`) dan stempel waktu DigiCert:
 
-1. **`SIAP-Print-Tailscale-v2.2.2-Setup.exe`**: File installer resmi Windows, otomatis menutup proses lama, memasang ke `%LocalAppData%\Programs\`, membuat pintasan Desktop dan Start Menu, serta mendaftarkan Scheduled Task Boot.
-2. **`SIAP-Print-Tailscale-v2.2.2-windows-x64.exe`**: Executable portabel mandiri tanpa instalasi (Single Portable Executable).
+1. **`SIAP-Print-Tailscale-v2.3.0-Setup.exe`**: File installer resmi Windows, otomatis menutup proses lama, memasang ke `%LocalAppData%\Programs\`, membuat pintasan Desktop dan Start Menu, serta mendaftarkan Scheduled Task Boot.
+2. **`SIAP-Print-Tailscale-v2.3.0-windows-x64.exe`**: Executable portabel mandiri tanpa instalasi (Single Portable Executable).
 3. **`SIAP-Print-Tailscale.exe`**: Binary mandiri utama di root repositori.
 
 ---

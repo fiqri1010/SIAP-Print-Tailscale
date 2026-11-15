@@ -36,7 +36,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # 3. Dapatkan Versi dari Project C# .NET
 $csprojPath = Join-Path $repoDir "src-csharp\SIAP-Print-Tailscale.csproj"
-$version = "2.2.2"
+$version = "2.3.0"
 if (Test-Path $csprojPath) {
     [xml]$xml = Get-Content $csprojPath
     $verNode = $xml.SelectSingleNode("//Version")
@@ -61,42 +61,65 @@ $releaseNotes = @"
 
 ## 🚀 Ringkasan Fitur & Pembaruan Rilis $tag
 
-### 1. 🛡️ Perbaikan Total UAC PowerShell Pop-up Berulang saat Startup
-- **Eliminasi UAC Berulang:** Memperbaiki bug di mana event handler checkbox startup terpanggil secara berantai saat form memuat konfigurasi awal, yang sebelumnya memicu dialog persetujuan UAC bergantian.
-- **Silent Config Loading:** Menambahkan proteksi `_isLoadingConfig` sehingga proses binding UI saat aplikasi menyala di latar belakang 100% senyap tanpa memicu `SaveSettings()`.
-- **Idempotent Boot Task Configuration:** Memastikan `ConfigureBootTask` memeriksa keberadaan Scheduled Task terlebih dahulu sebelum mencoba mendaftar ulang. Jika task sudah terpasang, fungsi langsung kembali (`return true`) tanpa memanggil PowerShell dengan `runas`.
-- **Dialog Konfirmasi Eksplisit:** Jika pengguna secara sadar mengklik checkbox "Mulai sebelum login", aplikasi menampilkan dialog konfirmasi terlebih dahulu sebelum meminta hak Administrator.
+### 1. 📅 Riwayat Cetak Lengkap dengan Tanggal & Waktu Presisi
+- Menambahkan tanggal lengkap pada tabel riwayat cetak di aplikasi (format: ``dd/MM/yyyy HH:mm:ss``).
+- Secara otomatis mengonversi riwayat log lama yang sebelumnya hanya menyimpan jam-menit-detik menjadi tanggal dan waktu lengkap yang akurat.
+- Kolom tabel riwayat cetakan disesuaikan agar tanggal dan waktu terbaca penuh dan rapi.
 
-### 2. ⚡ Hidup Otomatis Saat Windows Startup Bahkan Sebelum Login (Boot Service)
+### 2. 🔍 Deteksi Status Printer Real-Time (Idle, Aktif, Offline, Error) untuk SIAP NEO
+- Integrasi native **Win32 Spooler API (winspool.drv)** untuk mendeteksi status operasional printer:
+  - ``idle``: Printer online, siap menerima perintah cetak.
+  - ``aktif``: Printer sedang memproses / mencetak dokumen dari antrean spooler.
+  - ``offline``: Printer dalam mode Work Offline atau kabel/jaringan terputus.
+  - ``error``: Printer mengalami error fisik (Paper Jam / Kertas Macet, Paper Out / Kertas Habis, Door Open / Pintu Terbuka, atau Paused).
+- **Deteksi Cepat Printer Jaringan (TCP Port 9100):** Melakukan pemeriksaan status konektivitas TCP instan pada printer IP LAN (seperti Kyocera di kantor).
+- Menyediakan endpoint API baru untuk SIAP NEO:
+  - ``GET /printer-status``: Mengambil status printer default atau printer tertentu (``?name=...``).
+  - ``GET /printers``: Daftar printer lengkap dengan status operasional real-time.
+
+### 3. 🎯 Deteksi Tuntas Cetak Fisik (Physical Print Completion Tracking)
+- Setiap dokumen cetak kini memiliki ``job_id`` unik.
+- Respons ``POST /print-pdf`` menyertakan ``job_id`` dan status awal.
+- Pemantauan otomatis di latar belakang (*background spooler watcher*) untuk mendeteksi saat seluruh data cetak telah tuntas disalurkan dan diterima oleh hardware printer.
+- Menyediakan endpoint API baru untuk SIAP NEO:
+  - ``GET /job-status?job_id=...`` (atau ``/print-status?job_id=...``): Mengembalikan status apakah dokumen masih dalam antrean spooler atau sudah benar-benar selesai dicetak (``status: "printed"``, ``is_completed: true``).
+
+### 4. 📊 Tampilan Status Printer Real-Time di Antarmuka (UI)
+- Kartu pemilihan printer pada dashboard aplikasi kini menampilkan indikator status real-time dengan kode warna:
+  - 🟢 **Online (Siap)**
+  - 🔵 **Aktif (Mencetak)**
+  - 🔴 **Offline (Terputus)**
+  - ⚠️ **Error (Kertas Habis / Macet)**
+
+### 5. ⚡ Hidup Otomatis Saat Windows Startup Bahkan Sebelum Login (Boot Service)
 - Server langsung hidup dan mendengarkan permintaan cetak saat komputer dinyalakan, **bahkan sebelum ada pengguna yang login ke layar kunci Windows**.
-- Menggunakan integrasi native **Windows Task Scheduler (Task: ``SIAP-Print-Tailscale-Boot``)** dengan pemicu ``AtStartup`` dan principal ``NT AUTHORITY\SYSTEM`` berhak akses tertinggi.
-- Mode ``--headless`` super hemat memori (<5 MB RAM) yang melayani endpoint cetak 24/7 tanpa membutuhkan sesi desktop aktif.
-- Begitu petugas menyalakan PC kantor di pagi hari, HP petugas di lapangan dapat langsung mencetak dokumen SIAP NEO tanpa harus menunggu seseorang login ke desktop Windows.
-- Tetap menyediakan integrasi ``shell:startup`` dan registry ``HKCU\Run`` agar ikon System Tray dan Dashboard otomatis muncul saat pengguna login ke desktop.
+- Menggunakan integrasi native **Windows Task Scheduler (Task: ``SIAP-Print-Tailscale-Boot``)** dengan pemicu ``AtStartup`` dan principal ``NT AUTHORITY\SYSTEM``.
+- Mode ``--headless`` super hemat memori (<5 MB RAM).
+- Proteksi *Silent Loading* tanpa pop-up dialog UAC.
 
-### 3. ⚡ Ultra-Low Memory & Refactoring Performa Tinggi (>60% Lebih Hemat RAM)
-- Menggantikan ASP.NET Core Kestrel secara total dengan engine HTTP asynchronous berbasis ``TcpListener``.
-- Footprint RAM turun drastis ke **~8–14 MB** saat aktif dan **~3–6 MB** saat berada di System Tray (penghematan >60%–80%).
-- Streaming zero-copy Base64 decoding langsung dari UTF-8 buffer JSON tanpa alokasi string raksasa di Large Object Heap (LOH).
+### 6. ⚡ Ultra-Low Memory & Refactoring Performa Tinggi (>60% Lebih Hemat RAM)
+- Footprint RAM **~8–14 MB** saat aktif dan **~3–6 MB** di System Tray.
+- Zero-copy Base64 decoding streaming buffer.
+- Proteksi Anti-Duplikasi (*Single-Instance Mutex*).
 - Manajemen agresif Windows Working Set (``SetProcessWorkingSetSize``) segera setelah mencetak dan saat idle.
 
-### 4. 🛡️ Proteksi Single-Instance Anti-Duplikasi Mutlak
+### 7. 🛡️ Proteksi Single-Instance Anti-Duplikasi Mutlak
 - Proteksi berlapis ganda melalui Global Kernel Mutex, Local Session Mutex, dan pemindaian proses aktif Windows.
 - Jika pengguna mencoba membuka jendela kedua, aplikasi yang sedang aktif di latar belakang / System Tray otomatis dipulihkan ke layar kerja (``WM_SHOW_WINDOW``), dan proses kedua seketika keluar tanpa meninggalkan zombie process.
 
-### 5. 🖨️ PDF Engine Mandiri Presisi (Windows.Data.Pdf)
+### 8. 🖨️ PDF Engine Mandiri Presisi (Windows.Data.Pdf)
 - Merender dokumen per halaman ke grafis resolusi tinggi 300 DPI via Windows Runtime (``Windows.Data.Pdf``).
 - Penyaluran langsung via Windows Print Spooler GDI+ (``PrintDocument``) tanpa aplikasi pihak ketiga.
 - **Akurasi Halaman 100%:** Jumlah halaman tercetak persis sesuai dokumen asli dan 100% silent.
 
-### 6. 📄 Pengaturan Cetak dari SIAP NEO (v2.1+)
+### 9. 📄 Pengaturan Cetak dari SIAP NEO (v2.1+)
 - Mendukung ukuran kertas (A4, F4), margin khusus dalam milimeter, dan pemilihan rentang halaman dari HP.
 
-### 7. 🚀 Tailscale Funnel & Multi-Jaringan
+### 10. 🚀 Tailscale Funnel & Multi-Jaringan
 - Deteksi dinamis endpoint Tailscale Funnel HTTPS publik, IP Tailscale, dan IP LAN lokal kantor.
 - Dukungan satu-klik integrasi Windows Firewall.
 
-### 8. 📦 Paket Instalasi Windows Lengkap
+### 11. 📦 Paket Instalasi Windows Lengkap
 - Menyediakan installer mandiri (``SIAP-Print-Tailscale-$tag-Setup.exe``) dengan pembuatan pintasan Desktop dan Start Menu otomatis serta pendaftaran Boot Task Scheduler.
 - Berkas binary telah ditandatangani dengan sertifikat resmi Authenticode (``CN=Jadwal Priok Developer``).
 

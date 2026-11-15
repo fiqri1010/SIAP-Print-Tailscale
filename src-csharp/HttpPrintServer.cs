@@ -191,6 +191,9 @@ public class HttpPrintServer
                 // 3. Routing Endpoint GET
                 if (method == "GET")
                 {
+                    string query = rawUrl.Contains('?') ? rawUrl.Substring(rawUrl.IndexOf('?') + 1) : "";
+                    var queryParams = ParseQueryString(query);
+
                     if (path == "/ping")
                     {
                         await SendResponseAsync(stream, 200, "OK", "text/plain; charset=utf-8", "🖨️ SIAP Print Server is running");
@@ -212,8 +215,8 @@ public class HttpPrintServer
                             Hostname = Environment.MachineName,
                             SelectedPrinter = cfg.SelectedPrinter,
                             UptimeSeconds = _uptime.ElapsedMilliseconds / 1000,
-                            Version = typeof(HttpPrintServer).Assembly.GetName().Version?.ToString(3) ?? "2.1.1",
-                            Features = new[] { "paperSize", "margins", "pages" }
+                            Version = typeof(HttpPrintServer).Assembly.GetName().Version?.ToString(3) ?? "2.3.0",
+                            Features = new[] { "paperSize", "margins", "pages", "printerStatus", "jobTracking" }
                         };
 
                         string json = JsonSerializer.Serialize(info);
@@ -225,6 +228,119 @@ public class HttpPrintServer
                     {
                         var printers = WindowsPrinterHelper.GetPrinters();
                         string json = JsonSerializer.Serialize(printers);
+                        await SendResponseAsync(stream, 200, "OK", "application/json; charset=utf-8", json);
+                        return;
+                    }
+
+                    if (path == "/printer-status")
+                    {
+                        string target = queryParams.GetValueOrDefault("name") 
+                            ?? queryParams.GetValueOrDefault("printer") 
+                            ?? "";
+
+                        if (string.IsNullOrWhiteSpace(target))
+                        {
+                            var cfg = ConfigManager.LoadConfig();
+                            target = !string.IsNullOrWhiteSpace(cfg.SelectedPrinter) 
+                                ? cfg.SelectedPrinter 
+                                : new System.Drawing.Printing.PrinterSettings().PrinterName ?? "";
+                        }
+
+                        var (pStatus, pDesc, isOffline, jobCount, port, driver) = WindowsPrinterHelper.GetPrinterDetailedStatus(target);
+                        string defaultPrn = new System.Drawing.Printing.PrinterSettings().PrinterName ?? "";
+
+                        var statusDto = new PrinterStatusDto
+                        {
+                            Name = target,
+                            Status = pStatus,
+                            StatusDescription = pDesc,
+                            IsOffline = isOffline,
+                            JobCount = jobCount,
+                            Port = port,
+                            Driver = driver,
+                            IsDefault = string.Equals(target, defaultPrn, StringComparison.OrdinalIgnoreCase)
+                        };
+
+                        string json = JsonSerializer.Serialize(statusDto);
+                        await SendResponseAsync(stream, 200, "OK", "application/json; charset=utf-8", json);
+                        return;
+                    }
+
+                    if (path == "/job-status" || path == "/print-status")
+                    {
+                        string jobId = queryParams.GetValueOrDefault("job_id") 
+                            ?? queryParams.GetValueOrDefault("jobId") 
+                            ?? queryParams.GetValueOrDefault("id") 
+                            ?? "";
+
+                        // Bila /print-status dipanggil tanpa parameter job_id, arahkan ke printer-status
+                        if (string.IsNullOrWhiteSpace(jobId) && path == "/print-status")
+                        {
+                            var cfg = ConfigManager.LoadConfig();
+                            string target = !string.IsNullOrWhiteSpace(cfg.SelectedPrinter) 
+                                ? cfg.SelectedPrinter 
+                                : new System.Drawing.Printing.PrinterSettings().PrinterName ?? "";
+
+                            var (pStatus, pDesc, isOffline, jobCount, port, driver) = WindowsPrinterHelper.GetPrinterDetailedStatus(target);
+                            var statusDto = new PrinterStatusDto
+                            {
+                                Name = target,
+                                Status = pStatus,
+                                StatusDescription = pDesc,
+                                IsOffline = isOffline,
+                                JobCount = jobCount,
+                                Port = port,
+                                Driver = driver
+                            };
+                            await SendResponseAsync(stream, 200, "OK", "application/json; charset=utf-8", JsonSerializer.Serialize(statusDto));
+                            return;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(jobId))
+                        {
+                            var job = PrintJobTracker.GetJob(jobId);
+                            if (job == null)
+                            {
+                                // Cari di logs.json (riwayat cetak permanen)
+                                var logs = ConfigManager.LoadLogs();
+                                var foundLog = logs.FirstOrDefault(l => l.JobId == jobId || l.Id.ToString() == jobId);
+                                if (foundLog != null)
+                                {
+                                    job = new PrintJobStatusDto
+                                    {
+                                        JobId = foundLog.JobId,
+                                        Filename = foundLog.Filename,
+                                        Printer = foundLog.Printer,
+                                        Pages = foundLog.Pages,
+                                        Status = foundLog.Status == "SUKSES" ? "printed" : "failed",
+                                        IsCompleted = true,
+                                        Time = foundLog.DisplayTime,
+                                        Message = foundLog.Message,
+                                        Error = foundLog.Status == "SUKSES" ? null : foundLog.Message
+                                    };
+                                }
+                            }
+
+                            if (job != null)
+                            {
+                                await SendResponseAsync(stream, 200, "OK", "application/json; charset=utf-8", JsonSerializer.Serialize(job));
+                                return;
+                            }
+
+                            await SendResponseAsync(stream, 404, "Not Found", "application/json; charset=utf-8", 
+                                JsonSerializer.Serialize(new { error = $"Job ID '{jobId}' tidak ditemukan" }));
+                            return;
+                        }
+
+                        await SendResponseAsync(stream, 400, "Bad Request", "application/json; charset=utf-8", 
+                            JsonSerializer.Serialize(new { error = "Parameter 'job_id' diperlukan" }));
+                        return;
+                    }
+
+                    if (path == "/jobs" || path == "/history" || path == "/logs")
+                    {
+                        var logs = ConfigManager.LoadLogs();
+                        string json = JsonSerializer.Serialize(logs);
                         await SendResponseAsync(stream, 200, "OK", "application/json; charset=utf-8", json);
                         return;
                     }
@@ -339,7 +455,7 @@ public class HttpPrintServer
                     string docTitle = req.Filename ?? "SIAP_Document.pdf";
                     var options = new PrintOptions(req.PaperSize, req.MarginsMm, req.Pages);
 
-                    var (success, message, pagesPrinted, finalPrinter) = await NativePdfPrinter.PrintAsync(
+                    var (success, message, pagesPrinted, finalPrinter, jobId, jobStatus) = await NativePdfPrinter.PrintAsync(
                         pdfBytes,
                         req.PrinterName,
                         docTitle,
@@ -351,17 +467,22 @@ public class HttpPrintServer
 
                     var logItem = new PrintLogItem
                     {
+                        Id = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        JobId = jobId,
                         Filename = docTitle,
                         Printer = finalPrinter,
                         Pages = pagesPrinted,
                         Status = success ? "SUKSES" : "GAGAL",
-                        Message = message
+                        Message = message,
+                        Time = DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss")
                     };
                     ConfigManager.AddLog(logItem);
 
                     var responseDto = new PrintResponseDto
                     {
                         Success = success,
+                        JobId = jobId,
+                        Status = jobStatus,
                         Printer = finalPrinter,
                         Pages = pagesPrinted,
                         Message = message,
@@ -398,6 +519,20 @@ public class HttpPrintServer
             }
         }
         return -1;
+    }
+
+    private static Dictionary<string, string> ParseQueryString(string query)
+    {
+        var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(query)) return dict;
+        foreach (var part in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var kv = part.Split('=', 2);
+            string key = Uri.UnescapeDataString(kv[0]);
+            string val = kv.Length > 1 ? Uri.UnescapeDataString(kv[1]) : "";
+            dict[key] = val;
+        }
+        return dict;
     }
 
     private static async Task SendResponseAsync(NetworkStream stream, int statusCode, string statusText, string contentType, string body)
