@@ -59,6 +59,28 @@ static class Program
 
             if (forceReplace && runningInstances.Count > 0)
             {
+                try
+                {
+                    using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(1) };
+                    _ = client.PostAsync("http://127.0.0.1:1234/shutdown", null).Result;
+                    Thread.Sleep(300);
+                }
+                catch { }
+
+                try
+                {
+                    var psiKill = new ProcessStartInfo
+                    {
+                        FileName = "taskkill.exe",
+                        Arguments = "/F /T /IM SIAP-Print-Tailscale.exe",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    };
+                    using var proc = Process.Start(psiKill);
+                    proc?.WaitForExit(3000);
+                }
+                catch { }
+
                 foreach (var p in runningInstances)
                 {
                     try

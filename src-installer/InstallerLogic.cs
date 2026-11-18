@@ -21,6 +21,47 @@ public static class InstallerLogic
     public static void KillRunningInstances(Action<string>? statusCallback = null)
     {
         statusCallback?.Invoke("Memeriksa proses aplikasi yang sedang berjalan...");
+
+        // 1. Coba hentikan secara graceful via HTTP POST /shutdown
+        try
+        {
+            using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(1) };
+            _ = client.PostAsync("http://127.0.0.1:1234/shutdown", null).Result;
+            Thread.Sleep(300);
+        }
+        catch { }
+
+        // 2. Hentikan Boot Task jika ada yang aktif
+        try
+        {
+            var psiTask = new ProcessStartInfo
+            {
+                FileName = "schtasks.exe",
+                Arguments = "/end /tn \"SIAP-Print-Tailscale-Boot\"",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var proc = Process.Start(psiTask);
+            proc?.WaitForExit(2000);
+        }
+        catch { }
+
+        // 3. Gunakan taskkill /F /IM untuk menghentikan proses di seluruh session Windows (termasuk Session 0)
+        try
+        {
+            var psiKill = new ProcessStartInfo
+            {
+                FileName = "taskkill.exe",
+                Arguments = "/F /T /IM SIAP-Print-Tailscale.exe",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var proc = Process.Start(psiKill);
+            proc?.WaitForExit(3000);
+        }
+        catch { }
+
+        // 4. Fallback Process.Kill() untuk memastikan tidak ada sisa proses
         var currentPid = Process.GetCurrentProcess().Id;
         var processes = Process.GetProcesses()
             .Where(p => p.Id != currentPid &&

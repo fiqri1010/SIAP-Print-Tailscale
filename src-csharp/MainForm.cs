@@ -37,6 +37,9 @@ public class MainForm : Form
     private int _diagTickCount = 0;
     private bool _isLoadingConfig = false;
 
+    private FileSystemWatcher? _logsWatcher;
+    private DateTime _lastLogsFileWriteUtc = DateTime.MinValue;
+
     private bool _reallyExit = false;
 
     public MainForm(bool startMinimized = false)
@@ -79,6 +82,7 @@ public class MainForm : Form
 
         InitializeComponents();
         LoadConfigAndData();
+        SetupLogsWatcher();
 
         // Event listener saat log baru masuk
         ConfigManager.LogAdded += OnLogAdded;
@@ -685,14 +689,110 @@ public class MainForm : Form
         });
     }
 
+    private void SetupLogsWatcher()
+    {
+        try
+        {
+            string dataDir = ConfigManager.GetDataDir();
+            if (Directory.Exists(dataDir))
+            {
+                _logsWatcher = new FileSystemWatcher(dataDir, "logs.json")
+                {
+                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName,
+                    EnableRaisingEvents = true
+                };
+                _logsWatcher.Changed += OnLogsFileChanged;
+                _logsWatcher.Created += OnLogsFileChanged;
+            }
+        }
+        catch { }
+    }
+
+    private void OnLogsFileChanged(object sender, FileSystemEventArgs e)
+    {
+        try
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            BeginInvoke(new Action(() => SyncLogsFromDisk(forceReload: false)));
+        }
+        catch { }
+    }
+
     private void LoadLogsData()
     {
-        _gridLogs.Rows.Clear();
-        var logs = ConfigManager.LoadLogs();
-        foreach (var item in logs)
+        SyncLogsFromDisk(forceReload: true);
+    }
+
+    private void SyncLogsFromDisk(bool forceReload = false)
+    {
+        try
         {
-            AddGridRow(item);
+            var logs = ConfigManager.LoadLogs();
+            _lastLogsFileWriteUtc = ConfigManager.GetLogsLastWriteUtc();
+
+            if (forceReload || _gridLogs.Rows.Count == 0)
+            {
+                _gridLogs.Rows.Clear();
+                foreach (var item in logs)
+                {
+                    AddGridRow(item);
+                }
+                if (logs.Count > 0)
+                {
+                    _statusLabel.Text = $"Dokumen terakhir: {logs[0].Filename} - {logs[0].Status}";
+                }
+                return;
+            }
+
+            if (logs.Count == 0)
+            {
+                _gridLogs.Rows.Clear();
+                return;
+            }
+
+            var existingFirst = _gridLogs.Rows[0];
+            string existingTime = existingFirst.Cells["Time"].Value?.ToString() ?? "";
+            string existingFile = existingFirst.Cells["Filename"].Value?.ToString() ?? "";
+
+            if (logs[0].DisplayTime == existingTime && logs[0].Filename == existingFile)
+            {
+                return;
+            }
+
+            int newCount = 0;
+            for (int i = 0; i < logs.Count; i++)
+            {
+                if (logs[i].DisplayTime == existingTime && logs[i].Filename == existingFile)
+                {
+                    break;
+                }
+                newCount++;
+            }
+
+            if (newCount >= logs.Count || newCount > 20)
+            {
+                _gridLogs.Rows.Clear();
+                foreach (var item in logs)
+                {
+                    AddGridRow(item);
+                }
+            }
+            else
+            {
+                for (int i = newCount - 1; i >= 0; i--)
+                {
+                    AddGridRow(logs[i], insertAtTop: true);
+                }
+            }
+
+            while (_gridLogs.Rows.Count > 100)
+            {
+                _gridLogs.Rows.RemoveAt(_gridLogs.Rows.Count - 1);
+            }
+
+            _statusLabel.Text = $"Dokumen terakhir: {logs[0].Filename} - {logs[0].Status}";
         }
+        catch { }
     }
 
     private void OnLogAdded(PrintLogItem item)
@@ -703,8 +803,7 @@ public class MainForm : Form
             return;
         }
 
-        AddGridRow(item, insertAtTop: true);
-        _statusLabel.Text = $"Dokumen terakhir: {item.Filename} - {item.Status}";
+        SyncLogsFromDisk(forceReload: false);
     }
 
     private void AddGridRow(PrintLogItem item, bool insertAtTop = false)
@@ -753,6 +852,12 @@ public class MainForm : Form
             if (Visible && WindowState != FormWindowState.Minimized && _diagTickCount % 3 == 0)
             {
                 UpdateSelectedPrinterStatus();
+            }
+
+            DateTime currentLogWrite = ConfigManager.GetLogsLastWriteUtc();
+            if (currentLogWrite != DateTime.MinValue && currentLogWrite != _lastLogsFileWriteUtc)
+            {
+                SyncLogsFromDisk(forceReload: false);
             }
 
             using var proc = Process.GetCurrentProcess();
@@ -812,6 +917,7 @@ public class MainForm : Form
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         _statusTimer.Stop();
+        try { _logsWatcher?.Dispose(); } catch { }
         _ = _server.StopAsync();
         Application.Exit();
     }

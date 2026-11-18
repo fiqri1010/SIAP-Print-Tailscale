@@ -2,7 +2,7 @@
 
 **SIAP Print Tailscale** adalah aplikasi desktop Windows mandiri berbasis **C# dan .NET 8 Native** dengan antarmuka ringkas. Aplikasi ini menjadi jembatan cetak dokumen resmi (PIB, Dokap, dan Berita Acara Pemeriksaan / BAP) dari aplikasi **SIAP NEO** (KPU Bea Cukai Tanjung Priok) ke printer kantor (mis. Kyocera TASKalfa MZ3200i). Jalur koneksi yang didukung: **Tailscale Funnel**, **IP Tailscale**, atau **Wi-Fi kantor (LAN)**.
 
-Versi saat ini: **v2.3.0 (Native C# / .NET 8 Real-Time Printer Status & Job Tracking Edition)**
+Versi saat ini: **v2.3.1 (Native C# / .NET 8 Real-Time Log Sync, Process Mutex & Robust Tracking Edition)**
 
 ---
 
@@ -48,8 +48,8 @@ Pilih mode **Otomatis** agar SIAP NEO mencoba Funnel → IP Tailscale → IP LAN
 
 Seluruh berkas binary telah ditandatangani secara digital dengan sertifikat resmi Authenticode (`CN=Jadwal Priok Developer`) dan stempel waktu DigiCert:
 
-1. **`SIAP-Print-Tailscale-v2.3.0-Setup.exe`**: File installer resmi Windows, otomatis menutup proses lama, memasang ke `%LocalAppData%\Programs\`, membuat pintasan Desktop dan Start Menu, serta mendaftarkan Scheduled Task Boot.
-2. **`SIAP-Print-Tailscale-v2.3.0-windows-x64.exe`**: Executable portabel mandiri tanpa instalasi (Single Portable Executable).
+1. **`SIAP-Print-Tailscale-v2.3.1-Setup.exe`**: File installer resmi Windows, otomatis menutup proses lama, memasang ke `%LocalAppData%\Programs\`, membuat pintasan Desktop dan Start Menu, serta mendaftarkan Scheduled Task Boot.
+2. **`SIAP-Print-Tailscale-v2.3.1-windows-x64.exe`**: Executable portabel mandiri tanpa instalasi (Single Portable Executable).
 3. **`SIAP-Print-Tailscale.exe`**: Binary mandiri utama di root repositori.
 
 ---

@@ -47,7 +47,7 @@ public class HttpPrintServer
             _cts = new CancellationTokenSource();
 
             _listener = new TcpListener(IPAddress.Any, port);
-            _listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            _listener.ExclusiveAddressUse = true;
             _listener.Start(100);
 
             _uptime.Restart();
@@ -215,7 +215,7 @@ public class HttpPrintServer
                             Hostname = Environment.MachineName,
                             SelectedPrinter = cfg.SelectedPrinter,
                             UptimeSeconds = _uptime.ElapsedMilliseconds / 1000,
-                            Version = typeof(HttpPrintServer).Assembly.GetName().Version?.ToString(3) ?? "2.3.0",
+                            Version = typeof(HttpPrintServer).Assembly.GetName().Version?.ToString(3) ?? "2.3.1",
                             Features = new[] { "paperSize", "margins", "pages", "printerStatus", "jobTracking" }
                         };
 
