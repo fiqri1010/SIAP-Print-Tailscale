@@ -1,0 +1,101 @@
+name: Build & Release Windows EXE
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v2.3.2)'
+        required: true
+        default: 'v2.3.2'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Determine release version tag
+        id: meta
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ github.event.inputs.tag }}"
+          } else {
+            $tag = "${{ github.ref_name }}"
+          }
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Build Portable Single-File Executable
+        shell: pwsh
+        run: |
+          dotnet publish src-csharp/SIAP-Print-Tailscale.csproj `
+            -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true `
+            -o out-app
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item -Force "out-app/SIAP-Print-Tailscale.exe" "SIAP-Print-Tailscale.exe"
+          Copy-Item -Force "out-app/SIAP-Print-Tailscale.exe" "dist/SIAP-Print-Tailscale-${{ steps.meta.outputs.tag }}-windows-x64.exe"
+
+      - name: Build Windows Setup Installer Executable
+        shell: pwsh
+        run: |
+          dotnet publish src-installer/Installer.csproj `
+            -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true `
+            -o out-installer
+
+          Copy-Item -Force "out-installer/SIAP-Print-Tailscale-Setup.exe" "dist/SIAP-Print-Tailscale-${{ steps.meta.outputs.tag }}-Setup.exe"
+
+      - name: Verify built executables
+        shell: pwsh
+        run: |
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Publish GitHub Release with EXE assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $notes = @"
+          # SIAP Print Tailscale $tag
+
+          ## Perbaikan Kritis
+          1. **Perbaikan Crash Cetak PDF (\`NativePdfPrinter.cs\`):** Memperbaiki \`FormatException\` pada pembuatan \`job_id\` (\`Guid.NewGuid().ToString("N")[..6]\`) yang sebelumnya memutus koneksi tanpa respons pada setiap permintaan \`POST /print-pdf\`.
+          2. **Perbaikan Status Stuck di "Boot Service":** Saat aplikasi GUI dibuka, server kini mengambil alih port secara anggun dari background Boot Service sehingga status langsung **● ONLINE** dengan akses penuh ke printer sesi pengguna Windows.
+          3. **Perbaikan Decoding Query \`+\` pada \`/printer-status\`:** Nama printer berspasi yang dikirim dengan \`+\` maupun \`%20\` kini terbaca akurat.
+          4. **Dukungan \`forcePrint\` & Error JSON 500:** Mendukung tombol **Tetap Coba Cetak** dari SIAP NEO bila Windows Spooler keliru melaporkan status offline, serta memastikan pengecualian tak terduga mengirim pesan JSON jelas (bukan memutus soket).
+
+          ## Berkas Rilis
+          - **SIAP-Print-Tailscale-$tag-Setup.exe** (Installer Windows resmi)
+          - **SIAP-Print-Tailscale-$tag-windows-x64.exe** (Single Portable Executable)
+          "@
+
+          $notes | Out-File -FilePath release_notes.md -Encoding utf8
+
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag "dist/SIAP-Print-Tailscale-$tag-Setup.exe" "dist/SIAP-Print-Tailscale-$tag-windows-x64.exe" --clobber
+            gh release edit $tag --notes-file release_notes.md --title "SIAP Print Tailscale $tag - Print & Online Fix"
+          } else {
+            gh release create $tag "dist/SIAP-Print-Tailscale-$tag-Setup.exe" "dist/SIAP-Print-Tailscale-$tag-windows-x64.exe" `
+              --title "SIAP Print Tailscale $tag - Print & Online Fix" `
+              --notes-file release_notes.md
+          }

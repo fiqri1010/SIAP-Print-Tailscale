@@ -92,9 +92,9 @@ public class MainForm : Form
         _statusTimer.Tick += (s, e) => RefreshDiagnostics();
         _statusTimer.Start();
 
-        // Mulai Server HTTP
+        // Mulai Server HTTP (ambil alih dari Boot Service agar sesi GUI ONLINE penuh dengan akses printer user)
         var cfg = ConfigManager.LoadConfig();
-        _ = _server.StartAsync(cfg.Port);
+        _ = _server.StartAsync(cfg.Port, takeOverExternal: true);
 
         if (startMinimized)
         {
@@ -157,8 +157,8 @@ public class MainForm : Form
             ForeColor = Color.White,
             BackColor = Color.FromArgb(16, 185, 129), // Emerald-500
             TextAlign = ContentAlignment.MiddleCenter,
-            Size = new Size(100, 32),
-            Location = new Point(ClientSize.Width - 125, 18),
+            Size = new Size(138, 32),
+            Location = new Point(ClientSize.Width - 158, 18),
             Anchor = AnchorStyles.Top | AnchorStyles.Right
         };
 
@@ -208,7 +208,7 @@ public class MainForm : Form
                 var cfg = ConfigManager.LoadConfig();
                 cfg.Port = newPort;
                 ConfigManager.SaveConfig(cfg);
-                await _server.StartAsync(newPort);
+                await _server.StartAsync(newPort, takeOverExternal: true);
                 MessageBox.Show(this, $"Port berhasil diubah ke {newPort} dan server telah dimuat ulang.", "Informasi", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 RefreshNetworkInfo();
             }
@@ -870,6 +870,17 @@ public class MainForm : Form
                 {
                     _lblStatusBadge.Text = "● BOOT SERVICE";
                     _lblStatusBadge.BackColor = Color.FromArgb(2, 132, 199); // Sky-600
+                    if (_diagTickCount % 4 == 0)
+                    {
+                        _ = Task.Run(async () =>
+                        {
+                            bool alive = await _server.RefreshExternalServiceStatusAsync();
+                            if (!alive)
+                            {
+                                await _server.StartAsync(_server.ActivePort, takeOverExternal: true);
+                            }
+                        });
+                    }
                 }
                 else
                 {

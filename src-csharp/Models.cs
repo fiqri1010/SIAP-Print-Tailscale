@@ -159,6 +159,10 @@ public class PrintRequestDto
     /// <summary>Halaman yang dicetak, 1-based, mis. "1-3,5"; kosong = semua. (v2.1)</summary>
     [JsonPropertyName("pages")]
     public string? Pages { get; set; }
+
+    /// <summary>Abaikan pre-check status offline Windows Spooler bila pengguna memilih Tetap Coba Cetak. (v2.3.2)</summary>
+    [JsonPropertyName("forcePrint")]
+    public bool ForcePrint { get; set; } = false;
 }
 
 public class MarginsMmDto

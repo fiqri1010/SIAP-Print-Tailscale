@@ -105,11 +105,12 @@ public static class NativePdfPrinter
         string? requestedPrinter,
         string docTitle,
         PrintOptions? options = null,
-        string? requestedJobId = null)
+        string? requestedJobId = null,
+        bool forcePrint = false)
     {
         options ??= PrintOptions.Default;
         string jobId = string.IsNullOrWhiteSpace(requestedJobId)
-            ? $"job_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid():N[..6]}"
+            ? $"job_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid().ToString("N")[..6]}"
             : requestedJobId;
 
         if (pdfBytes == null || pdfBytes.Length == 0)
@@ -157,13 +158,16 @@ public static class NativePdfPrinter
                 return (false, "Tidak ada printer aktif yang terdeteksi di sistem Windows", 0, "", jobId, "failed");
             }
 
-            // Pre-check status printer: Jangan kirim bila printer offline atau error fisik
-            var (pStatus, pDesc, isOffline, _, _, _) = WindowsPrinterHelper.GetPrinterDetailedStatus(finalPrinter);
-            if (isOffline || pStatus == "error")
+            // Pre-check status printer: Jangan kirim bila printer offline atau error fisik (kecuali forcePrint=true)
+            if (!forcePrint)
             {
-                PrintJobTracker.RegisterJob(jobId, docTitle, finalPrinter, totalPages);
-                PrintJobTracker.UpdateJob(jobId, "failed", $"Printer '{finalPrinter}' tidak siap: {pDesc}", true, pDesc);
-                return (false, $"Printer '{finalPrinter}' tidak siap: {pDesc}", 0, finalPrinter, jobId, "failed");
+                var (pStatus, pDesc, isOffline, _, _, _) = WindowsPrinterHelper.GetPrinterDetailedStatus(finalPrinter);
+                if (isOffline || pStatus == "error")
+                {
+                    PrintJobTracker.RegisterJob(jobId, docTitle, finalPrinter, totalPages);
+                    PrintJobTracker.UpdateJob(jobId, "failed", $"Printer '{finalPrinter}' tidak siap: {pDesc}", true, pDesc);
+                    return (false, $"Printer '{finalPrinter}' tidak siap: {pDesc}", 0, finalPrinter, jobId, "failed");
+                }
             }
 
             // Daftarkan print job ke tracker

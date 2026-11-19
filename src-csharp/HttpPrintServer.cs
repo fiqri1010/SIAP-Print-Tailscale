@@ -27,7 +27,7 @@ public class HttpPrintServer
 
     public event Action<string>? ServerStatusChanged;
 
-    public async Task StartAsync(int port)
+    public async Task StartAsync(int port, bool takeOverExternal = false)
     {
         string logPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
@@ -37,6 +37,7 @@ public class HttpPrintServer
 
         try
         {
+            Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
             File.AppendAllText(logPath, $"[{DateTime.Now}] Memulai Lightweight HTTP Server pada port {port}...\n");
             if (IsRunning)
             {
@@ -63,6 +64,45 @@ public class HttpPrintServer
         {
             // Cek apakah server kita sendiri yang sedang berjalan (mis. Boot Task di background)
             bool isSelfActive = await CheckIfSelfServiceActiveAsync(port);
+            if (isSelfActive && takeOverExternal)
+            {
+                File.AppendAllText(logPath, $"[{DateTime.Now}] Boot Service terdeteksi pada port {port}; mengalihkan ke sesi GUI interaktif...\n");
+                try
+                {
+                    using var shutdownClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+                    await shutdownClient.PostAsync($"http://127.0.0.1:{port}/shutdown", null);
+                }
+                catch { }
+
+                for (int attempt = 0; attempt < 10; attempt++)
+                {
+                    await Task.Delay(250);
+                    try
+                    {
+                        _cts?.Dispose();
+                        _cts = new CancellationTokenSource();
+                        _listener = new TcpListener(IPAddress.Any, port);
+                        _listener.ExclusiveAddressUse = true;
+                        _listener.Start(100);
+
+                        ActivePort = port;
+                        _uptime.Restart();
+                        IsRunning = true;
+                        IsExternalService = false;
+                        ServerStatusChanged?.Invoke($"Berjalan pada port {port}");
+                        File.AppendAllText(logPath, $"[{DateTime.Now}] Alih kendali dari Boot Service berhasil; server GUI ONLINE pada 0.0.0.0:{port}\n");
+                        _ = AcceptConnectionsAsync(_cts.Token, logPath);
+                        return;
+                    }
+                    catch
+                    {
+                        try { _listener?.Stop(); } catch { }
+                        _listener = null;
+                    }
+                }
+                isSelfActive = await CheckIfSelfServiceActiveAsync(port);
+            }
+
             if (isSelfActive)
             {
                 IsRunning = true;
@@ -78,6 +118,19 @@ public class HttpPrintServer
             ServerStatusChanged?.Invoke($"Terhenti: {ex.Message}");
             File.AppendAllText(logPath, $"[{DateTime.Now}] ERROR memulai server: {ex}\n");
         }
+    }
+
+    public async Task<bool> RefreshExternalServiceStatusAsync()
+    {
+        if (!IsExternalService) return IsRunning;
+        bool alive = await CheckIfSelfServiceActiveAsync(ActivePort);
+        if (!alive)
+        {
+            IsRunning = false;
+            IsExternalService = false;
+            ServerStatusChanged?.Invoke("Terhenti");
+        }
+        return alive;
     }
 
     public static async Task<bool> CheckIfSelfServiceActiveAsync(int port)
@@ -215,8 +268,8 @@ public class HttpPrintServer
                             Hostname = Environment.MachineName,
                             SelectedPrinter = cfg.SelectedPrinter,
                             UptimeSeconds = _uptime.ElapsedMilliseconds / 1000,
-                            Version = typeof(HttpPrintServer).Assembly.GetName().Version?.ToString(3) ?? "2.3.1",
-                            Features = new[] { "paperSize", "margins", "pages", "printerStatus", "jobTracking" }
+                            Version = typeof(HttpPrintServer).Assembly.GetName().Version?.ToString(3) ?? "2.3.2",
+                            Features = new[] { "paperSize", "margins", "pages", "printerStatus", "jobTracking", "forcePrint" }
                         };
 
                         string json = JsonSerializer.Serialize(info);
@@ -435,6 +488,9 @@ public class HttpPrintServer
                             req.MarginsMm = margins;
                         }
 
+                        if (root.TryGetProperty("forcePrint", out var fpProp) && (fpProp.ValueKind == JsonValueKind.True || fpProp.ValueKind == JsonValueKind.False))
+                            req.ForcePrint = fpProp.GetBoolean();
+
                         if (root.TryGetProperty("pdfBase64", out var b64Prop) && b64Prop.ValueKind == JsonValueKind.String)
                         {
                             // Konversi langsung dari UTF-8 buffer JSON tanpa intermediate C# UTF-16 string!
@@ -470,7 +526,8 @@ public class HttpPrintServer
                         pdfBytes,
                         req.PrinterName,
                         docTitle,
-                        options
+                        options,
+                        forcePrint: req.ForcePrint
                     );
 
                     // Bersihkan referensi data PDF untuk membantu Garbage Collector
@@ -513,7 +570,17 @@ public class HttpPrintServer
             {
                 try
                 {
-                    File.AppendAllText(logPath, $"[{DateTime.Now}] Client processing error: {ex.Message}\n");
+                    File.AppendAllText(logPath, $"[{DateTime.Now}] Client processing error: {ex}\n");
+                }
+                catch { }
+                try
+                {
+                    var errDto = new PrintResponseDto
+                    {
+                        Success = false,
+                        Error = $"Internal Print Server Error: {ex.Message}"
+                    };
+                    await SendResponseAsync(stream, 500, "Internal Server Error", "application/json; charset=utf-8", JsonSerializer.Serialize(errDto));
                 }
                 catch { }
             }
@@ -539,8 +606,8 @@ public class HttpPrintServer
         foreach (var part in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
         {
             var kv = part.Split('=', 2);
-            string key = Uri.UnescapeDataString(kv[0]);
-            string val = kv.Length > 1 ? Uri.UnescapeDataString(kv[1]) : "";
+            string key = Uri.UnescapeDataString(kv[0].Replace('+', ' '));
+            string val = kv.Length > 1 ? Uri.UnescapeDataString(kv[1].Replace('+', ' ')) : "";
             dict[key] = val;
         }
         return dict;
