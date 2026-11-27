@@ -1,4 +1,4 @@
-﻿# ==============================================================================
+# ==============================================================================
 # Script Otomatis Rilis GitHub untuk SIAP-Print-Tailscale (100% C# .NET)
 # ==============================================================================
 $ErrorActionPreference = "Stop"
@@ -29,7 +29,8 @@ $repoCheck = & $ghExe repo view "fiqri1010/SIAP-Print-Tailscale" 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Mendaftarkan repositori publik baru 'SIAP-Print-Tailscale' di GitHub..." -ForegroundColor Green
     & $ghExe repo create "SIAP-Print-Tailscale" --public --source=. --remote=origin --push
-} else {
+}
+else {
     Write-Host "Mendorong commit terbaru ke GitHub..." -ForegroundColor Green
     git push -u origin master
 }

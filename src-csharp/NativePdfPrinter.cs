@@ -196,12 +196,10 @@ public static class NativePdfPrinter
             }
             else
             {
-                // Margin bawaan: gunakan batas wajar cetak (4 mm / ~16 hundredths inch)
-                // agar halaman otomatis pas (auto-fit) kiri-kanan-atas-bawah dan tidak
-                // terpotong, menggantikan margin default GDI+ 1 inci (25.4 mm) yang terlalu besar.
-                int defaultMargin = MmToHundredthsInch(4.0);
-                printDoc.DefaultPageSettings.Margins = new Margins(
-                    defaultMargin, defaultMargin, defaultMargin, defaultMargin);
+                // v2.3.3: Margin bawaan = 0 mm tambahan (cetak 1:1 sesuai ukuran & margin asli dokumen PDF).
+                // Dokumen PDF sudah memiliki margin halamannya sendiri; menumpuk margin GDI+ tambahan
+                // justru memperkecil isi halaman dan memperlebar margin putih secara tidak wajar.
+                printDoc.DefaultPageSettings.Margins = new Margins(0, 0, 0, 0);
             }
 
             // v2.1: hanya halaman terpilih
@@ -209,6 +207,22 @@ public static class NativePdfPrinter
             int listPos = 0;
             int currentPageIndex = 0;
             Exception? pageException = null;
+
+            // v2.3.3: Orientasi Landscape/Portrait WAJIB disetel di QueryPageSettings sebelum
+            // Windows membuat Device Context (HDC) halaman; menyetelnya di dalam PrintPage
+            // diabaikan oleh GDI+ sehingga halaman Landscape menyusut ke kertas Portrait.
+            printDoc.QueryPageSettings += (sender, e) =>
+            {
+                try
+                {
+                    if (listPos < pageList.Count)
+                    {
+                        using var pdfPage = pdfDoc.GetPage((uint)pageList[listPos]);
+                        e.PageSettings.Landscape = pdfPage.Size.Width > pdfPage.Size.Height;
+                    }
+                }
+                catch { }
+            };
 
             printDoc.PrintPage += (sender, e) =>
             {
@@ -223,10 +237,10 @@ public static class NativePdfPrinter
 
                     using var pdfPage = pdfDoc.GetPage((uint)currentPageIndex);
 
-                    // Render halaman ke bitmap 300 DPI untuk ketajaman teks formulir dan barcode
+                    // Render halaman ke bitmap 300 DPI presisi (Windows.Data.Pdf Size memakai satuan 96 DIP/inci)
                     using var memStream = new InMemoryRandomAccessStream();
                     var renderOptions = new PdfPageRenderOptions();
-                    uint targetWidth = (uint)Math.Max(300, pdfPage.Size.Width * 300 / 72);
+                    uint targetWidth = (uint)Math.Max(300, Math.Round(pdfPage.Size.Width * 300.0 / 96.0));
                     renderOptions.DestinationWidth = targetWidth;
 
                     pdfPage.RenderToStreamAsync(memStream, renderOptions).AsTask().GetAwaiter().GetResult();
@@ -234,50 +248,47 @@ public static class NativePdfPrinter
                     using var netStream = memStream.AsStream();
                     using var pageBmp = new Bitmap(netStream);
 
-                    // Deteksi orientasi otomatis (Landscape / Portrait)
-                    bool isLandscape = pdfPage.Size.Width > pdfPage.Size.Height;
-                    e.PageSettings.Landscape = isLandscape;
+                    bool isLandscape = e.PageSettings.Landscape;
 
-                    // Hitung batas cetak
-                    var printArea = e.MarginBounds;
-                    try
+                    // Area target fisik (dalam 1/100 inci relatif terhadap tepi kertas fisik 0,0):
+                    // - Margin bawaan (null): penuh seluruh kertas (e.PageBounds) agar 1:1 asli dokumen PDF.
+                    // - Margin manual: tepi kertas dikurangi tepat margin mm yang diminta pengguna.
+                    RectangleF targetPhys;
+                    if (options.MarginsMm != null)
                     {
-                        var printable = e.PageSettings.PrintableArea;
-                        if (printable.Width > 0 && printable.Height > 0)
-                        {
-                            int pLeft = (int)Math.Ceiling(printable.Left);
-                            int pTop = (int)Math.Ceiling(printable.Top);
-                            int pRight = (int)Math.Floor(printable.Right);
-                            int pBottom = (int)Math.Floor(printable.Bottom);
-
-                            int left = Math.Max(printArea.Left, pLeft);
-                            int top = Math.Max(printArea.Top, pTop);
-                            int right = Math.Min(printArea.Right, pRight);
-                            int bottom = Math.Min(printArea.Bottom, pBottom);
-
-                            if (right > left && bottom > top)
-                            {
-                                printArea = new Rectangle(left, top, right - left, bottom - top);
-                            }
-                        }
+                        var m = options.MarginsMm;
+                        float mLeft = MmToHundredthsInch(m.Left);
+                        float mRight = MmToHundredthsInch(m.Right);
+                        float mTop = MmToHundredthsInch(m.Top);
+                        float mBottom = MmToHundredthsInch(m.Bottom);
+                        float w = e.PageBounds.Width - mLeft - mRight;
+                        float h = e.PageBounds.Height - mTop - mBottom;
+                        targetPhys = (w > 10f && h > 10f)
+                            ? new RectangleF(mLeft, mTop, w, h)
+                            : new RectangleF(0f, 0f, e.PageBounds.Width, e.PageBounds.Height);
                     }
-                    catch { }
-
-                    if (printArea.Width <= 0 || printArea.Height <= 0)
+                    else
                     {
-                        printArea = e.PageBounds;
+                        targetPhys = new RectangleF(0f, 0f, e.PageBounds.Width, e.PageBounds.Height);
                     }
 
-                    // Skala gambar agar pas dan proporsional di tengah halaman
+                    // Skala proporsional agar pas dan terpusat pada area target fisik
                     float scale = Math.Min(
-                        (float)printArea.Width / pageBmp.Width,
-                        (float)printArea.Height / pageBmp.Height
+                        targetPhys.Width / pageBmp.Width,
+                        targetPhys.Height / pageBmp.Height
                     );
 
-                    int destWidth = (int)(pageBmp.Width * scale);
-                    int destHeight = (int)(pageBmp.Height * scale);
-                    int destX = printArea.Left + (printArea.Width - destWidth) / 2;
-                    int destY = printArea.Top + (printArea.Height - destHeight) / 2;
+                    float destWidth = pageBmp.Width * scale;
+                    float destHeight = pageBmp.Height * scale;
+                    float physX = targetPhys.Left + (targetPhys.Width - destWidth) / 2f;
+                    float physY = targetPhys.Top + (targetPhys.Height - destHeight) / 2f;
+
+                    // Kompensasi HardMarginX/Y (origin e.Graphics saat OriginAtMargins=false berada pada
+                    // sudut kiri-atas PrintableArea, bukan tepi fisik 0,0; pada Landscape X & Y ditukar).
+                    float hardX = isLandscape ? e.PageSettings.HardMarginY : e.PageSettings.HardMarginX;
+                    float hardY = isLandscape ? e.PageSettings.HardMarginX : e.PageSettings.HardMarginY;
+                    float drawX = physX - hardX;
+                    float drawY = physY - hardY;
 
                     if (e.Graphics != null)
                     {
@@ -285,7 +296,7 @@ public static class NativePdfPrinter
                         e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
                         e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
 
-                        e.Graphics.DrawImage(pageBmp, new Rectangle(destX, destY, destWidth, destHeight));
+                        e.Graphics.DrawImage(pageBmp, new RectangleF(drawX, drawY, destWidth, destHeight));
                     }
 
                     listPos++;
